@@ -7,6 +7,7 @@ Benjamin Sullivan Flex Friday project 2025/2026
   - Can initialize with any number of layers and neurons per layer
   - Uses ReLU activation
   - Currently random weights and training data
+- This is a nice resorce https://www.youtube.com/playlist?list=PLQVvvaa0QuDcjD5BAw2DxE6OF2tius3V3
 
 ## Oct. 31
 - Added automatic scoring
