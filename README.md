@@ -1,6 +1,11 @@
 # BazSkyjo-0.0
 Benjamin Sullivan Flex Friday project 2025/2026
 
+## Nov. 21
+- Implimented backpropagation
+- Implimented replay buffer
+  - Both of these are untested as I do not yet have a working environment
+
 ## Nov. 14
 - Started work on practice model
   - Object oriented
