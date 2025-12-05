@@ -1,6 +1,11 @@
 # BazSkyjo-0.0
 Benjamin Sullivan Flex Friday project 2025/2026
 
+## Dec. 5
+- Made test rock paper scissors environment
+- When I attemped to run it I ran into multiple array size michmatch errors
+- Did not resolve them today, will work on them across next week
+
 ## Nov. 21
 - Implimented backpropagation
 - Implimented replay buffer
