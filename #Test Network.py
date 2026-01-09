@@ -9,6 +9,7 @@ import numpy as np #type: ignore
 np.random.seed(2)
 import copy
 from collections import deque
+from pandas import DataFrame
 
 e = math.e
 
@@ -38,20 +39,24 @@ class DuelingDQN:
         self.replayBuffer = ReplayBuffer(50000) # capacity
         
         # main network
-        self.model = Network([state_size, 32], action_size)
+        self.model = Network([state_size, 128, 128, 32], action_size)
         
         # target network
         self.target_model = copy.deepcopy(self.model)
     
-    def choose_action(self, state): # epsilon greedy function
+    def choose_action(self, state, legal_actions): # epsilon greedy function
         
         # "exploration", allows the model to sometimes choose a fully random action to get itself out of local minima
         if np.random.rand() < self.epsilon:
             return random.randint(0, self.action_size - 1)
         
         # "explotation", the model chooses the action it thinks is best and gets the results
-        q_values = self.model.calculate(state)
-        q_values = q_values.flatten()
+        q_values = self.model.calculate(state).flatten()
+        
+        # Mask illegal actions by setting them to VERY negative
+        masked_q = np.full_like(q_values, -1e9)
+        masked_q[legal_actions] = q_values[legal_actions]
+        
         return int(np.argmax(q_values))
     
     def compute_targets(self, batch):
@@ -121,6 +126,10 @@ class DuelingDQN:
         layer_a = self.model.advantage
         target_layer_a.weights = (1 - self.tau) * target_layer_a.weights + self.tau * layer_a.weights
         target_layer_a.biases  = (1 - self.tau) * target_layer_a.biases  + self.tau * layer_a.biases
+    
+    def save(self, path): pass
+    
+    def load(self, path): pass
 
 class Network:
     
@@ -407,27 +416,207 @@ class Dice_Env(Environment):
             return 1
         return -1 # incorrect coin toss
 
+class Quixx_Env(Environment):
+    
+    def __init__(self, debug=False):
+        super().__init__(state_size=51, action_size=13)
+        
+        self.sheet = None
+        self.dice = None
+        self.done = False
+        self.legal_marks = None
+        
+        self.debug = debug
+        
+        self.reset()
+    
+    def dbg(self, msg):
+        if self.debug: print(msg)
+    
+    def reset(self):
+        
+        # roll all 6 dice
+        self.dice = [random.randint(1,6) for _ in range(6)] #white1, white2, red, yellow, green, blue
+        self.dbg(f"Dice rolled: {self.dice}")
+        
+        # create blank sheet
+        self.sheet = {
+            "red": [0,0,0,0,0,0,0,0,0,0,0],
+            "yellow": [0,0,0,0,0,0,0,0,0,0,0],
+            "green": [0,0,0,0,0,0,0,0,0,0,0],
+            "blue": [0,0,0,0,0,0,0,0,0,0,0],
+            "penalties": 0
+            }
+        
+        self.done = False
+        
+        return self.encode_state()
+    
+    def encode_state(self):
+        
+        # flatten current sheet info
+        sheet_vals = (
+            self.sheet["red"]
+            + self.sheet["yellow"]
+            + self.sheet["green"]
+            + self.sheet["blue"]
+            + [self.sheet["penalties"]]
+        )
+        
+        # flatten all info to state
+        state = sheet_vals + self.dice
+        
+        return np.array(state, dtype=float)
+    
+    def step(self, action):
+        
+        # return gamestate if done
+        if self.done: return self.encode_state(), 0, True # done = true
+        
+        # init reward
+        reward = 0
+        
+        if action == 12:
+            
+            self.sheet["penalties"] += 1
+            reward = -5
+            self.dbg("Action was SKIP/PENALTY")
+            
+        else:
+            white = self.dice[0:2]
+            color_dice = self.dice[2:]  # red, yellow, green, blue dice
+            
+            if action < 4:
+                color = ["red","yellow","green","blue"][action]
+                idx = sum(white)
+            elif action == 4:
+                color = "red"; idx = white[0] + color_dice[0]
+            elif action == 5:
+                color = "red"; idx = white[1] + color_dice[0]
+            elif action == 6:
+                color = "yellow"; idx = white[0] + color_dice[1]
+            elif action == 7:
+                color = "yellow"; idx = white[1] + color_dice[1]
+            elif action == 8:
+                color = "green"; idx = white[0] + color_dice[2]
+            elif action == 9:
+                color = "green"; idx = white[1] + color_dice[2]
+            elif action == 10:
+                color = "blue"; idx = white[0] + color_dice[3]
+            elif action == 11:
+                color = "blue"; idx = white[1] + color_dice[3]
+                
+            self.dbg(f"Trying to mark {color}, at number {idx}")
+            
+            if action in self.legal_marks:
+                self.sheet[color][idx-2] = 1  # idx starts at 1
+                reward = 2
+            else:
+                self.sheet["penalties"] += 1
+                reward = -5
+                self.dbg("Illegal move, penalty applied")
+        
+        self.dbg(f"{self.sheet["red"]}")
+        self.dbg(f"{self.sheet["yellow"]}")
+        self.dbg(f"{self.sheet["green"]}")
+        self.dbg(f"{self.sheet["blue"]}")
+        self.dbg(f"Pens: {self.sheet["penalties"]}")
+        
+        if self.sheet["penalties"] >= 4: self.done = True
+        
+        # roll new dice for next turn
+        self.dice = [random.randint(1,6) for _ in range(6)]
+        self.dbg(f"Dice rolled: {self.dice}")
+        
+        return self.encode_state(), reward, self.done
+    
+    def get_legal_actions(self):
+        
+        # init legal moves (will be returned at end of function)
+        legal = []
+        
+        def can_mark(color, idx):
+            if color in ["red", "yellow"]:
+                if idx != 10:
+                    return sum(self.sheet[color][idx-2:]) == 0 # only allowed to mark rightmost squares
+                else: return sum(self.sheet[color]) >= 5 # must have 5 marks to claim lock
+            else:
+                if idx != 10:
+                    return sum(self.sheet[color][:idx-1]) == 0 # only allowed to mark leftmost squares
+                else: return sum(self.sheet[color]) >= 5 # still must have 5 marks to claim lock
+        
+        # white+white
+        ww_sum = self.dice[0] + self.dice[1] - 1  # convert to index
+        for action_idx, color in enumerate(["red", "yellow", "green", "blue"]):
+            if can_mark(color, ww_sum):
+                legal.append(action_idx)
+        
+        # red
+        if can_mark("red", self.dice[0] + self.dice[2] - 2): legal.append(4)
+        if can_mark("red", self.dice[1] + self.dice[2] - 2): legal.append(5)
+        
+        # yellow
+        if can_mark("yellow", self.dice[0] + self.dice[3] - 2): legal.append(6)
+        if can_mark("yellow", self.dice[1] + self.dice[3] - 2): legal.append(7)
+        
+        # green
+        if can_mark("green", self.dice[0] + self.dice[4] - 2): legal.append(8)
+        if can_mark("green", self.dice[1] + self.dice[4] - 2): legal.append(9)
+        
+        # blue
+        if can_mark("blue", self.dice[0] + self.dice[5] - 2): legal.append(10)
+        if can_mark("blue", self.dice[1] + self.dice[5] - 2): legal.append(11)
+        
+        # penalty action is always legal
+        legal.append(12)
+        
+        self.dbg(f"Legal marks: {legal}")
+        
+        return legal
+    
+    def score_game(self):
+        
+        # penalty is -5
+        score = self.sheet["penalties"] * -5
+        
+        # each row is worth more for every new mark
+        point_vals = [0, 1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66, 78]
+        
+        for color in ["red", "yellow", "green", "blue"]:
+            score += point_vals[sum(self.sheet[color])]
+        
+        self.dbg(f"Game over! Score is: {score}")
+        
+        return score
+
 def main():
     
-    env = Dice_Env(10)
-    agent = DuelingDQN(env.state_size, env.action_size, epsilon_decay=0.99995, epsilon_min=0.01) #set agent size to fit env
+    # env and model settings
+    env = Quixx_Env()
+    agent = DuelingDQN(env.state_size, env.action_size, epsilon_decay=0.99995, epsilon_min=0.01) # set agent size to fit env
+    episodes = 20000
+    max_steps = 20
     
-    # one_hot does not need more then 1 step
-    episodes = 100000
-    max_steps = 1
+    # data collection settings
+    episode_scores = []
+    total_episode_score = 0
+    episode_reward = 0
+    rewards = []
+    scores = []
     
     # visual indicator for impacient humans
-    total_reward = 0
-    num_logs = 50
+    num_logs = 100
     
     for i in range(episodes):
         
+        env.debug = (i == episodes-1)
         state = env.reset()
         
         for _ in range(max_steps):
             
             # agent makes a descision
-            action = agent.choose_action(state)
+            env.legal_marks = env.get_legal_actions()
+            action = agent.choose_action(state, legal_actions=env.legal_marks)
             
             # get results from action
             next_state, reward, done = env.step(action)
@@ -437,7 +626,7 @@ def main():
             reward = float(reward)
             reward = np.clip(reward, -1, 1)
             
-            total_reward += reward
+            episode_reward += reward
             
             # save state to replaybuffer
             agent.replayBuffer.push(state, action, reward, next_state, done)
@@ -452,16 +641,31 @@ def main():
             if done:
                 break
         
-        if i % (episodes / num_logs) == 0:
+        score = env.score_game()
+        episode_scores.append(score)
+        total_episode_score += score
+        
+        if i % 100 == 0: # data tracking
+            rewards.append(reward)
+            scores.append(score)
+        
+        if i % (episodes / num_logs) == 0: # logs
             
-            print(f"Episode {i}: epsilon={agent.epsilon:.3f}, avg_reward={total_reward / (episodes / num_logs):.3f}")
+            print(f"Episode {i}: epsilon={agent.epsilon:.3f}, avg_reward={episode_reward / (episodes / num_logs):.3f}, avg_game_score={total_episode_score/len(episode_scores)}")
             
-            total_reward = 0
+            episode_reward = 0
+            
+            episode_scores = []
+            total_episode_score = 0
             
             # show example trial
             #test_state = env.encode_state(random.randint(0, env.state_size - 1))
             #print("Inputs", test_state, "Predicted Q:", agent.model.calculate(test_state))
     
+    df = DataFrame({'Rewards': reward, 'Scores': scores})
+    df.to_excel('c:/users/benjaminsullivan/downloads/results.xlsx', sheet_name='sheet1', index=False)
+    
+    """
     for i in range(env.state_size): # test all states (for one_hot envs)
         test_state = env.encode_state(i)
         solution = agent.model.calculate(test_state)
@@ -469,6 +673,38 @@ def main():
         success = list(solution[0]).index(max(solution[0])) == i
         print(f"State {i + 1}:", guess, success)
         print(solution)
+    """
 
 if __name__ == "__main__":
     main()
+
+
+"""
+Turn options
+ww (r)
+ww (y)
+ww (g)
+ww (b)
+w1r
+w2r
+w1y
+w2y
+w1g
+w2g
+w1b
+w2b
+penalty
+"""
+
+"""
+<- tasklist ->
+
+rules
+    can claim two per turn
+
+model
+    choose highest legal option, instead of default to penalty
+    find best neuron size
+    try differing epsilon decays
+    save/load
+"""
