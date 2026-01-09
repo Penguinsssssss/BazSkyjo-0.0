@@ -1,6 +1,13 @@
 # BazSkyjo-0.0
 Benjamin Sullivan Flex Friday project 2025/2026
 
+## Jan. 9
+- Added Quixx_Env
+  - Quixx is a strategy based dice game
+  - Saw incredible results with input -> 128 -> 128 -> 32 -> dueling heads
+    - Average score of -13 to average score of 0.5 over 200,000 episodes
+    - Shows *definate* learning capabilities
+
 ## Dec. 5
 - Made test rock paper scissors environment
 - When I attemped to run it I ran into multiple array size michmatch errors
