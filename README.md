@@ -1,6 +1,12 @@
 # BazSkyjo-0.0
 Benjamin Sullivan Flex Friday project 2025/2026
 
+## Jan. 23
+- Discovered issue with reward plateau
+  - Reward fuctions incorrect
+- Started work on scripting explanation video
+- Not much time today, >1 hour speaker series
+
 ## Jan. 16
 - A lot of technical difficulties today
   - Bot learns quickly but is unable to maintain intelligence when training extends over a long timeframe
