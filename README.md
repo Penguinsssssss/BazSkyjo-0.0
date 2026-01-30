@@ -1,6 +1,11 @@
 # BazSkyjo-0.0
 Benjamin Sullivan Flex Friday project 2025/2026
 
+## Jan. 30
+- Began impimenting Skjyo environment
+- Began work on mutli-agent training
+- Continued scritping on video
+
 ## Jan. 23
 - Discovered issue with reward plateau
   - Reward fuctions incorrect
