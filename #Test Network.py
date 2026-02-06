@@ -44,20 +44,26 @@ class DuelingDQN:
         # target network
         self.target_model = copy.deepcopy(self.model)
     
-    def choose_action(self, state, legal_actions): # epsilon greedy function
+    def choose_action(self, state, legal_actions, return_q=False): # epsilon greedy function
         
-        # "exploration", allows the model to sometimes choose a fully random action to get itself out of local minima
-        if np.random.rand() < self.epsilon:
-            return random.randint(0, self.action_size - 1)
-        
-        # "explotation", the model chooses the action it thinks is best and gets the results
         q_values = self.model.calculate(state).flatten()
         
-        # Mask illegal actions by setting them to VERY negative
+        # mask illegal actions by setting them to very negative
         masked_q = np.full_like(q_values, -1e9)
         masked_q[legal_actions] = q_values[legal_actions]
         
-        return int(np.argmax(q_values))
+        # "exploration", allows the model to sometimes choose a fully random action to get itself out of local minima
+        if np.random.rand() < self.epsilon:
+            action = int(random.choice(legal_actions))
+        
+        # "explotation", the model chooses the action it thinks is best and gets the results
+        else:
+            # Exploitation: choose BEST LEGAL action
+            action = int(np.argmax(masked_q))
+        
+        if return_q:
+            return action, masked_q  # <- array of evals for all moves
+        return action
     
     def compute_targets(self, batch):
         
@@ -127,9 +133,84 @@ class DuelingDQN:
         target_layer_a.weights = (1 - self.tau) * target_layer_a.weights + self.tau * layer_a.weights
         target_layer_a.biases  = (1 - self.tau) * target_layer_a.biases  + self.tau * layer_a.biases
     
-    def save(self, path): pass
+    def save(self, path):
+        
+        data = {}
+        
+        # main trunk
+        for i, layer in enumerate(self.model.layers):
+            data[f"m_layers_{i}_W"] = layer.weights
+            data[f"m_layers_{i}_b"] = layer.biases
+            
+        # main heads
+        data["m_value_W"] = self.model.value.weights
+        data["m_value_b"] = self.model.value.biases
+        data["m_adv_W"] = self.model.advantage.weights
+        data["m_adv_b"] = self.model.advantage.biases
+        
+        # target trunk
+        for i, layer in enumerate(self.target_model.layers):
+            data[f"t_layers_{i}_W"] = layer.weights
+            data[f"t_layers_{i}_b"] = layer.biases
+            
+        # target head
+        data["t_value_W"] = self.target_model.value.weights
+        data["t_value_b"] = self.target_model.value.biases
+        data["t_adv_W"] = self.target_model.advantage.weights
+        data["t_adv_b"] = self.target_model.advantage.biases
+        
+        # meta
+        data["epsilon"] = np.array([self.epsilon], dtype=np.float32)
+        data["epsilon_decay"] = np.array([self.epsilon_decay], dtype=np.float32)
+        data["epsilon_min"] = np.array([self.epsilon_min], dtype=np.float32)
+        data["gamma"] = np.array([self.gamma], dtype=np.float32)
+        data["lr"] = np.array([self.lr], dtype=np.float32)
+        data["tau"] = np.array([self.tau], dtype=np.float32)
+        data["state_size"] = np.array([self.state_size], dtype=np.int32)
+        data["action_size"] = np.array([self.action_size], dtype=np.int32)
+        data["num_layers"] = np.array([len(self.model.layers)], dtype=np.int32)
+        
+        np.savez_compressed(path, **data)
     
-    def load(self, path): pass
+    def load(self, path, load_target=True, load_epsilon=True):
+        
+        ckpt = np.load(path, allow_pickle=False)
+        
+        # sanity checks
+        if int(ckpt["state_size"][0]) != self.state_size:
+            raise ValueError(f"Checkpoint state_size {int(ckpt['state_size'][0])} != agent state_size {self.state_size}")
+        if int(ckpt["action_size"][0]) != self.action_size:
+            raise ValueError(f"Checkpoint action_size {int(ckpt['action_size'][0])} != agent action_size {self.action_size}")
+        
+        expected_layers = int(ckpt["num_layers"][0])
+        if expected_layers != len(self.model.layers):
+            raise ValueError(f"Checkpoint trunk layers {expected_layers} != agent trunk layers {len(self.model.layers)}")
+        
+        # main trunk
+        for i, layer in enumerate(self.model.layers):
+            layer.weights = ckpt[f"m_layers_{i}_W"]
+            layer.biases  = ckpt[f"m_layers_{i}_b"]
+            
+        # main heads
+        self.model.value.weights = ckpt["m_value_W"]
+        self.model.value.biases  = ckpt["m_value_b"]
+        self.model.advantage.weights = ckpt["m_adv_W"]
+        self.model.advantage.biases  = ckpt["m_adv_b"]
+        
+        if load_target:
+            # target trunk
+            for i, layer in enumerate(self.target_model.layers):
+                layer.weights = ckpt[f"t_layers_{i}_W"]
+                layer.biases  = ckpt[f"t_layers_{i}_b"]
+                
+            # target heads
+            self.target_model.value.weights = ckpt["t_value_W"]
+            self.target_model.value.biases  = ckpt["t_value_b"]
+            self.target_model.advantage.weights = ckpt["t_adv_W"]
+            self.target_model.advantage.biases  = ckpt["t_adv_b"]
+            
+        if load_epsilon:
+            self.epsilon = float(ckpt["epsilon"][0])
 
 class Network:
     
@@ -302,123 +383,10 @@ class Environment:
     def step(self, action): pass
     def get_reward(self): pass
 
-class RPS_Env(Environment):
-    
-    def __init__(self):
-        super().__init__(state_size=3, action_size=3)
-        self.opponent_move = None  # store last move
-    
-    def reset(self):
-        # opponent picks first
-        self.opponent_move = random.randint(0, 2)
-        return self.encode_state(self.opponent_move)
-    
-    def step(self, action):
-        # reward according to RPS rules
-        opp = self.opponent_move
-        reward = self.get_reward(action, opp)
-        
-        # generate next opponent move (new state)
-        next_opp = random.randint(0, 2)
-        next_state = self.encode_state(next_opp)
-        
-        done = False  # Each RPS turn is independent, so never-ending episode
-        self.opponent_move = next_opp
-        
-        return next_state, reward, done
-    
-    def encode_state(self, move):
-        # convert 0/1/2 into one-hot vector
-        one_hot = np.zeros(3)
-        one_hot[move] = 1
-        return one_hot
-    
-    def get_reward(self, agent, opp):
-        # Standard RPS result logic (rock paper scissors - 0 1 2)
-        if agent == opp:
-            return 0      # tie
-        if (agent == 0 and opp == 2) or \
-            (agent == 1 and opp == 0) or \
-            (agent == 2 and opp == 1):
-            return 1      # win
-        return -1         # lose
-    
-    def devGetOutput(self, action=random.randint(0, 2)):
-        return self.encode_state(action)
-
-class Coin_Env(Environment):
-    
-    def __init__(self):
-        super().__init__(state_size=2, action_size=2)
-        self.flip = None  # store coinflip
-    
-    def reset(self):
-        self.flip = random.randint(0, 1)
-        return self.encode_state(self.flip)
-    
-    def encode_state(self, move):
-        # convert 0/1 into one-hot vector
-        one_hot = np.zeros(2)
-        one_hot[move] = 1
-        return one_hot
-    
-    def step(self, action):
-        # reward according to RPS rules
-        coin = self.flip
-        reward = self.get_reward(action, coin)
-        
-        # generate next opponent move (new state)
-        next_coin = random.randint(0, 1)
-        next_state = self.encode_state(next_coin)
-        
-        done = False  # Each RPS turn is independent, so never-ending episode
-        self.opponent_move = next_coin
-        
-        return next_state, reward, done
-    
-    def get_reward(self, agent, opp):
-        if agent == opp: # correct coin toss
-            return 1
-        return -1 # incorrect coin toss
-
-class Dice_Env(Environment):
-    def __init__(self, dicesize):
-        super().__init__(state_size=dicesize, action_size=dicesize)
-        self.flip = None  # store coinflip
-        self.dicesize = dicesize
-    
-    def reset(self):
-        self.flip = random.randint(0, self.dicesize - 1)
-        return self.encode_state(self.flip)
-    
-    def encode_state(self, move):
-        # convert 0/1 into one-hot vector
-        one_hot = np.zeros(self.dicesize)
-        one_hot[move] = 1
-        return one_hot
-    
-    def step(self, action):
-        # reward according to RPS rules
-        coin = self.flip
-        reward = self.get_reward(action, coin)
-        
-        # generate next opponent move (new state)
-        next_coin = random.randint(0, self.dicesize - 1)
-        next_state = self.encode_state(next_coin)
-        
-        done = False  # Each RPS turn is independent, so never-ending episode
-        self.opponent_move = next_coin
-        
-        return next_state, reward, done
-    
-    def get_reward(self, guess, dice):
-        if guess == dice: # correct coin toss
-            return 1
-        return -1 # incorrect coin toss
-
 class Quixx_Env(Environment):
     
     def __init__(self, debug=False):
+        
         super().__init__(state_size=51, action_size=13)
         
         self.sheet = None
@@ -479,7 +447,7 @@ class Quixx_Env(Environment):
         if action == 12:
             
             self.sheet["penalties"] += 1
-            reward = -5
+            reward = -0.5
             self.dbg("Action was SKIP/PENALTY")
             
         else:
@@ -505,15 +473,32 @@ class Quixx_Env(Environment):
                 color = "blue"; idx = white[0] + color_dice[3]
             elif action == 11:
                 color = "blue"; idx = white[1] + color_dice[3]
-                
+            
             self.dbg(f"Trying to mark {color}, at number {idx}")
             
             if action in self.legal_marks:
+                if color in ["red", "yellow"]:
+                    # rows go left to right
+                    if 1 in self.sheet[color]:
+                        last_mark = max(i for i, v in enumerate(self.sheet[color]) if v == 1)
+                        skips = (idx-2) - last_mark - 1
+                    else:
+                        skips = (idx-2)  # skipped everything before first mark
+                        
+                else:
+                    # green / blue go right to left
+                    if 1 in self.sheet[color]:
+                        last_mark = min(i for i, v in enumerate(self.sheet[color]) if v == 1)
+                        skips = last_mark - (idx-2) - 1
+                    else:
+                        skips = (len(self.sheet[color]) - 1) - (idx-2)  # skipped everything after first mark
+                
                 self.sheet[color][idx-2] = 1  # idx starts at 1
-                reward = 2
+                reward = 0.3 - (0.2 * skips)
+                
             else:
                 self.sheet["penalties"] += 1
-                reward = -5
+                reward = -0.5
                 self.dbg("Illegal move, penalty applied")
         
         self.dbg(f"{self.sheet["red"]}")
@@ -589,13 +574,259 @@ class Quixx_Env(Environment):
         
         return score
 
+class Skyjo_Env(Environment):
+    
+    def __init__(self, debug=False):
+        
+        super().__init__(state_size=42, action_size=24)
+        # 12 cards, 12 for upstream player, 12 for downstream player, 1 for discard, 1 for number of players, 1 for avg value of deck, 1 for lowest unknowns of any player, 1 for pending card, 1 for phase
+        
+        self.debug = debug
+        
+        self.reset()
+    
+    def reset(self):
+        
+        # create cards for other simulated players
+        self.numplayers = random.randint(2, 6)
+        self.hands = []
+        for i in range(self.numplayers - 1):
+            self.hands.append([None, None, None, None, None, None, None, None, None, None, None, None])
+        
+        # cards for self
+        self.hand = [None, None, None, None, None, None, None, None, None, None, None, None]
+        
+        # make deck and discard
+        self.deck = []
+        for i in range(5): self.deck.append(-2) # five -2's
+        for i in range(10): self.deck.append(-1) # ten -1's
+        for i in range(15): self.deck.append(0) # fifteen 0's
+        for i in range(12): # ten of 1 -> 12
+            for j in range(10): self.deck.append(i + 1)
+        random.shuffle(self.deck)
+        self.discard = self.deck.pop()
+        
+        self.phase = "main"
+        self.pendingcard = None
+        
+        self.done = False
+        
+        return self.encode_state()
+    
+    def encode_state(self):
+        
+        own = [self.enc_card(i) for i in self.hand]
+        down = [self.enc_card(i) for i in self.hands[0]]
+        up = [self.enc_card(i) for i in self.hands[-1]]
+        
+        return (
+            own + # own cards
+            down + # downstream player's cards
+            up + # upstream player's cards
+            [self.discard] + # dicard card
+            [self.numplayers] + # number of players
+            [sum(self.deck) / len(self.deck)] + # average value of unknown
+            [min(sum(card is None for card in hand) for hand in self.hands)] + # lowest number of unknowns for any opposing player
+            [self.pendingcard if self.phase == "pending" else 13] + # gives bot pending card if held
+            [1 if self.phase == "pending" else 0]
+        )
+    
+    def enc_card(self, card):
+            return float(card) if card is not None else 13.0  # sentinel for unknown
+    
+    def step(self, action):
+        
+        self.dbg(f"baz hand: {self.hand[:4]}")
+        self.dbg(f"baz hand: {self.hand[4:8]}")
+        self.dbg(f"baz hand: {self.hand[8:]}")
+        self.dbg("")
+        
+        # if any players have 0 unknowns or deck is empty
+        if min(sum(card is None for card in hand) for hand in self.hands) == 0 or sum(card is None for card in self.hand) == 0 or len(self.deck) == 0:
+            
+            # end game
+            self.done = True
+            
+            # return state
+            return self.encode_state(), 0, self.done
+        
+        # init reward
+        self.reward = 0
+        
+        # agent acts
+        self.act(action)
+        
+        # calculate reward
+        self.reward = self.calcreward()
+        
+        # return state if pending
+        if self.phase == "pending":
+            return self.encode_state(), self.reward, False
+        
+        else: # advance opponents if not pending
+            self.advanceopp()
+        
+        return self.encode_state(), self.reward, self.done
+    
+    def act(self, action):
+        
+        # main: 0-11 discard -> hand, 12 reveal top of deck
+        # pending: 0-11 pending -> hand, 12-23 pending -> discard + reveal one card in hand
+        
+        if self.phase == "main":
+            
+            if action == 12: # TAKE FROM DRAW
+                
+                # draw card from deck and query dqn
+                self.phase = "pending"
+                self.pendingcard = self.deck.pop()
+                
+                self.dbg(f"Action 12 (draw) chosen (card {self.pendingcard})")
+                
+                return
+            
+            else: # TAKE FROM DISCARD
+                
+                self.dbg(f"Action {action} chosen (discard to x) discard is: {self.discard}")
+                
+                # store discard
+                card = self.discard
+                
+                # place the unknown into the discard
+                if self.hand[action] is None:
+                    self.discard = self.deck.pop()
+                else: self.discard = self.hand[action] # place known card into discard
+                
+                # change hand
+                self.hand[action] = card
+                
+                self.phase = "main"
+        
+        elif self.phase == "pending":
+            
+            if action < 12: # ACCEPT CARD
+                
+                self.dbg(f"chosen to accept pendingcard to slot {action}")
+                
+                # place the unknown into the discard
+                if self.hand[action] is None:
+                    self.discard = self.deck.pop()
+                else: self.discard = self.hand[action] # place known card into discard
+                
+                self.hand[action] = self.pendingcard
+            
+            else: # REJECT CARD
+                
+                self.dbg(f"chosen to reject pendingcard and reveal slot {action - 12}")
+                
+                # discard rejected card
+                self.discard = self.pendingcard
+                
+                # reveal card
+                self.hand[action - 12] = self.deck.pop()
+            
+            self.pendingcard = None
+            self.phase = "main"
+    
+    def advanceopp(self):
+        
+        for i in self.hands: # basic opponent bot
+            
+            if len(self.deck)  == 0: return # ensure deck has cards
+            
+            avg = sum(self.deck) / len(self.deck)
+            
+            if self.discard < avg: # take discard if is lower than average unknown
+                
+                # replace random unknown/card with higher value
+                
+                replaceindexes = []
+                for j in range(len(i)): # for card in cards
+                    if (i[j] if i[j] is not None else avg) >= self.discard: # if card is more than discard (treat unknown like avg)
+                        replaceindexes.append(j) # add it to indexes
+                
+                replacedidx = random.choice(replaceindexes)
+                replacedcard = i[replacedidx] if i[replacedidx] is not None else self.deck.pop()
+                
+                i[replacedidx] = self.discard
+                self.discard = replacedcard
+            
+            else: # draw card
+                
+                # replace random unknown/card with higher value
+                
+                replaceindexes = []
+                for j in range(len(i)): # for card in cards
+                    if (i[j] if i[j] is not None else float("inf")) >= self.deck[-1]: # if card is more than discard (treat unkown like inf)
+                        replaceindexes.append(j) # add it to indexes
+                
+                replacedidx = random.choice(replaceindexes)
+                replacedcard = i[replacedidx] if i[replacedidx] is not None else self.deck.pop(0)
+                
+                i[replacedidx] = self.deck.pop()
+                self.discard = replacedcard
+    
+    def calcreward(self):
+        
+        reward = 0
+        avg = sum(self.deck) / len(self.deck)
+        
+        for i in range(4):
+        
+            if self.hand[i] == self.hand[i + 4] == self.hand[i + 8] and self.hand[i] is not None: # if column is same card and not unknowns
+                pass # add zero to score
+            else: # otherwise
+                reward += self.hand[i] if self.hand[i] is not None else avg + 5 # add either value of card or average of unknowns
+                reward += self.hand[i + 4] if self.hand[i + 4] is not None else avg + 5
+                reward += self.hand[i + 8] if self.hand[i + 8] is not None else avg + 5
+        
+        return -reward
+    
+    def get_legal_actions(self):
+        
+        if self.phase == "main":
+            
+            return list(range(13))  # 0-11 discard->hand, 12 draw
+        
+        else:
+            
+            legal = list(range(12))  # accept pending into slot 0-11 always legal
+            
+            # reject+reveal only legal if that reveal slot is None
+            
+            for i in range(12):
+                if self.hand[i] is None:
+                    legal.append(12 + i)
+                
+            return legal
+    
+    def score_game(self):
+        
+        score = 0
+        
+        for i in range(4):
+        
+            if self.hand[i] == self.hand[i + 4] == self.hand[i + 8] and self.hand[i] is not None: # if column is same card and not unknowns
+                pass # add zero to score
+            else: # otherwise
+                score += self.hand[i] if self.hand[i] is not None else self.deck.pop() # add either value of card or average of unknowns
+                score += self.hand[i + 4] if self.hand[i + 4] is not None else self.deck.pop()
+                score += self.hand[i + 8] if self.hand[i + 8] is not None else self.deck.pop()
+                
+        return score
+    
+    def dbg(self, msg):
+        if self.debug: print(msg)
+
 def main():
     
     # env and model settings
-    env = Quixx_Env()
-    agent = DuelingDQN(env.state_size, env.action_size, epsilon_decay=0.99995, epsilon_min=0.01) # set agent size to fit env
-    episodes = 20000
-    max_steps = 20
+    env = Skyjo_Env(debug=False)
+    agent = DuelingDQN(env.state_size, env.action_size, epsilon_decay=0.9999995, epsilon_min=0.01) # set agent size to fit env
+    #agent.load("c:\\users\\benjaminsullivan\\downloads\\checkpoint3.npz")
+    
+    episodes = 10000
+    max_steps = 1000
     
     # data collection settings
     episode_scores = []
@@ -607,24 +838,21 @@ def main():
     # visual indicator for impacient humans
     num_logs = 100
     
-    for i in range(episodes):
+    for ep in range(episodes):
         
-        env.debug = (i == episodes-1)
+        env.debug = (ep == episodes-1)
         state = env.reset()
         
         for _ in range(max_steps):
             
             # agent makes a descision
-            env.legal_marks = env.get_legal_actions()
-            action = agent.choose_action(state, legal_actions=env.legal_marks)
+            legal_actions = env.get_legal_actions()
+            action, values = agent.choose_action(state, legal_actions=legal_actions, return_q=True)
             
-            # get results from action
+            # step env
             next_state, reward, done = env.step(action)
-            
-            state = state.flatten()
-            next_state = next_state.flatten()
+            next_state = np.array(next_state, dtype=np.float32)
             reward = float(reward)
-            reward = np.clip(reward, -1, 1)
             
             episode_reward += reward
             
@@ -645,66 +873,20 @@ def main():
         episode_scores.append(score)
         total_episode_score += score
         
-        if i % 100 == 0: # data tracking
+        if ep % 10 == 0: # data tracking
             rewards.append(reward)
             scores.append(score)
         
-        if i % (episodes / num_logs) == 0: # logs
+        if ep % (episodes / num_logs) == 0: # logs
             
-            print(f"Episode {i}: epsilon={agent.epsilon:.3f}, avg_reward={episode_reward / (episodes / num_logs):.3f}, avg_game_score={total_episode_score/len(episode_scores)}")
+            print(f"Episode {ep}: epsilon={agent.epsilon:.3f}, avg_reward={episode_reward / (episodes / num_logs):.3f}, avg_game_score={total_episode_score/len(episode_scores)}")
             
             episode_reward = 0
             
             episode_scores = []
             total_episode_score = 0
-            
-            # show example trial
-            #test_state = env.encode_state(random.randint(0, env.state_size - 1))
-            #print("Inputs", test_state, "Predicted Q:", agent.model.calculate(test_state))
     
-    df = DataFrame({'Rewards': reward, 'Scores': scores})
-    df.to_excel('c:/users/benjaminsullivan/downloads/results.xlsx', sheet_name='sheet1', index=False)
-    
-    """
-    for i in range(env.state_size): # test all states (for one_hot envs)
-        test_state = env.encode_state(i)
-        solution = agent.model.calculate(test_state)
-        guess = list(solution[0]).index(max(solution[0])) + 1
-        success = list(solution[0]).index(max(solution[0])) == i
-        print(f"State {i + 1}:", guess, success)
-        print(solution)
-    """
+    #agent.save("c:\\users\\benjaminsullivan\\downloads\\checkpoint3.npz")
 
 if __name__ == "__main__":
     main()
-
-
-"""
-Turn options
-ww (r)
-ww (y)
-ww (g)
-ww (b)
-w1r
-w2r
-w1y
-w2y
-w1g
-w2g
-w1b
-w2b
-penalty
-"""
-
-"""
-<- tasklist ->
-
-rules
-    can claim two per turn
-
-model
-    choose highest legal option, instead of default to penalty
-    find best neuron size
-    try differing epsilon decays
-    save/load
-"""
