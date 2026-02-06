@@ -1,6 +1,11 @@
 # BazSkyjo-0.0
 Benjamin Sullivan Flex Friday project 2025/2026
 
+## Feb. 6
+- Finished implementation of skyjo game logic
+- Added save/load
+- Initial training of bot shows no improvement (100,000 episodes). Will play with both reward function and size of brain next week.
+
 ## Jan. 30
 - Began impimenting Skjyo environment
 - Began work on mutli-agent training
