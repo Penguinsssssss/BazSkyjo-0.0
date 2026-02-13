@@ -1,6 +1,18 @@
 # BazSkyjo-0.0
 Benjamin Sullivan Flex Friday project 2025/2026
 
+## Feb. 13
+- Spent whole day trying different combinations of reward functions and brain settings
+  - 1 -> 2 -> 3 hidden layers
+  - 64 -> 128 -> 256 neurons per layer
+  - Number of opponents
+  - REWARD FUNCTION
+    - Treat unknown cards as avg of remaining unseen cards
+    - Treat unknown cards as 12 (highest value)
+    - Treat unknown cards as half of avg '*'THIS MADE PROGRESS'*'
+    - Treat unknown cards as 99 (very big penalty per unknown)
+    - Treat getting a row as 999 reward
+
 ## Feb. 6
 - Finished implementation of skyjo game logic
 - Added save/load
