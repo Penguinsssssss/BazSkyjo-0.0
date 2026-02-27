@@ -219,11 +219,11 @@ class Network:
         # init all layers
         self.layers = []
         for i in range(len(layerstruct) - 1):
-            self.layers.append(Layer(layerstruct[i], layerstruct[i + 1]))
+            self.layers.append(Layer(layerstruct[i], layerstruct[i + 1], activation="relu"))
         
         # init v and a for Dueling DQN
-        self.value = Layer(layerstruct[-1], 1) # value layer, shape (batch, 1)
-        self.advantage = Layer(layerstruct[-1], num_actions) # advantage head shape (batch, num_actions)
+        self.value = Layer(layerstruct[-1], 1, activation="linear") # value layer, shape (batch, 1)
+        self.advantage = Layer(layerstruct[-1], num_actions, activation="linear") # advantage head shape (batch, num_actions)
     
     def calculate(self, inputs):
         
@@ -292,20 +292,23 @@ class Network:
         
         return loss
     
-    def mse(pred, target): return np.mean((pred - target)**2) #loss function
-    def d_mse(pred, target): return 2 * (pred - target) / pred.size #derivative loss function
+    def mse(pred, target): return np.mean((pred - target)**2) # loss function
+    def d_mse(pred, target): return 2 * (pred - target) / pred.size # derivative loss function
 
 class Layer:
     
-    def __init__(self, numinputs, numneurons):
+    def __init__(self, numinputs, numneurons, activation):
         
         # init starting values (currently random)
         self.weights = 0.1 * np.random.randn(numinputs, numneurons) # shape (inputs, neurons)
         self.biases = np.zeros([1, numneurons]) # shape (i, neurons)
         
-        # currently using relu, will look into gelu or tanh
-        self.function = relu
-        self.d_function = d_relu
+        if activation == "relu":
+            self.function = relu
+            self.d_function = d_relu
+        elif activation == "linear":
+            self.function = lambda x: x
+            self.d_function = lambda x: np.ones_like(x)
         
         # store previous inputs for BP
         self.last_inputs = None
@@ -339,11 +342,11 @@ class Layer:
     
     def update_parameters(self, lr):
         
-        self.weights -= lr * self.dW
-        self.biases  -= lr * self.db
-        
         np.clip(self.dW, -1, 1, out=self.dW)
         np.clip(self.db, -1, 1, out=self.db)
+        
+        self.weights -= lr * self.dW
+        self.biases  -= lr * self.db
 
 class ReplayBuffer:
     
@@ -587,15 +590,6 @@ class Skyjo_Env(Environment):
     
     def reset(self):
         
-        # create cards for other simulated players
-        self.numplayers = random.randint(2, 6)
-        self.hands = []
-        for i in range(self.numplayers - 1):
-            self.hands.append([None, None, None, None, None, None, None, None, None, None, None, None])
-        
-        # cards for self
-        self.hand = [None, None, None, None, None, None, None, None, None, None, None, None]
-        
         # make deck and discard
         self.deck = []
         for i in range(5): self.deck.append(-2) # five -2's
@@ -605,6 +599,15 @@ class Skyjo_Env(Environment):
             for j in range(10): self.deck.append(i + 1)
         random.shuffle(self.deck)
         self.discard = self.deck.pop()
+        
+        # create cards for other simulated players
+        self.numplayers = random.randint(2, 6)
+        self.hands = []
+        for i in range(self.numplayers - 1):
+            self.hands.append([self.deck.pop(), self.deck.pop(), None, None, None, None, None, None, None, None, None, None])
+        
+        # cards for self
+        self.hand = [self.deck.pop(), self.deck.pop(), None, None, None, None, None, None, None, None, None, None]
         
         self.phase = "main"
         self.pendingcard = None
@@ -636,10 +639,12 @@ class Skyjo_Env(Environment):
     
     def step(self, action):
         
+        self.dbg("")
         self.dbg(f"baz hand: {self.hand[:4]}")
         self.dbg(f"baz hand: {self.hand[4:8]}")
         self.dbg(f"baz hand: {self.hand[8:]}")
-        self.dbg("")
+        self.dbg(f"discard: {self.discard}")
+        self.dbg(f"next card: {self.deck[0]}")
         
         # if any players have 0 unknowns or deck is empty
         if min(sum(card is None for card in hand) for hand in self.hands) == 0 or sum(card is None for card in self.hand) == 0 or len(self.deck) == 0:
@@ -769,18 +774,27 @@ class Skyjo_Env(Environment):
     def calcreward(self):
         
         reward = 0
-        avg = sum(self.deck) / len(self.deck)
+        #avg = sum(self.deck) / len(self.deck)
         
         for i in range(4):
         
-            if self.hand[i] == self.hand[i + 4] == self.hand[i + 8] and self.hand[i] is not None: # if column is same card and not unknowns
-                pass # add zero to score
+            card1 = self.hand[i]
+            card2 = self.hand[i + 4]
+            card3 = self.hand[i + 8]
+            
+            if card1 == card2 == card3 and card1 is not None: # if column is same card and not unknowns
+                reward += 50
+                self.dbg("added 50 reward due to row!")
+            elif (card1 == card2 and card1 is not None) or (card1 == card3 and card1 is not None) or (card2 == card3 and card2 is not None): # check if any two cards are the same
+                reward += 10
+                self.dbg("added 10 reward due to double!")
             else: # otherwise
-                reward += self.hand[i] if self.hand[i] is not None else avg + 5 # add either value of card or average of unknowns
-                reward += self.hand[i + 4] if self.hand[i + 4] is not None else avg + 5
-                reward += self.hand[i + 8] if self.hand[i + 8] is not None else avg + 5
+                reward -= card1 if card1 is not None else 2 # add either value of card or average of unknowns
+                reward -= card2 if card2 is not None else 2
+                reward -= card3 if card3 is not None else 2
         
-        return -reward
+        self.dbg(f"reward for this turn is {reward}")
+        return reward
     
     def get_legal_actions(self):
         
@@ -822,10 +836,10 @@ def main():
     
     # env and model settings
     env = Skyjo_Env(debug=False)
-    agent = DuelingDQN(env.state_size, env.action_size, epsilon_decay=0.9999995, epsilon_min=0.01) # set agent size to fit env
-    #agent.load("c:\\users\\benjaminsullivan\\downloads\\checkpoint3.npz")
+    agent = DuelingDQN(env.state_size, env.action_size, epsilon_decay=0.99995, epsilon_min=0.01) # set agent size to fit env
+    agent.load("c:\\users\\benjaminsullivan\\downloads\\checkpoint PROGRESS.npz",)
     
-    episodes = 10000
+    episodes = 100000
     max_steps = 1000
     
     # data collection settings
@@ -841,12 +855,13 @@ def main():
     for ep in range(episodes):
         
         env.debug = (ep == episodes-1)
-        state = env.reset()
+        state = np.array(env.reset(), dtype=np.float32)
         
         for _ in range(max_steps):
             
             # agent makes a descision
             legal_actions = env.get_legal_actions()
+            
             action, values = agent.choose_action(state, legal_actions=legal_actions, return_q=True)
             
             # step env
@@ -877,7 +892,7 @@ def main():
             rewards.append(reward)
             scores.append(score)
         
-        if ep % (episodes / num_logs) == 0: # logs
+        if ep % (episodes / num_logs) == 0 and ep != 0: # logs
             
             print(f"Episode {ep}: epsilon={agent.epsilon:.3f}, avg_reward={episode_reward / (episodes / num_logs):.3f}, avg_game_score={total_episode_score/len(episode_scores)}")
             
@@ -885,8 +900,10 @@ def main():
             
             episode_scores = []
             total_episode_score = 0
+            
+            agent.save("c:\\users\\benjaminsullivan\\downloads\\checkpoint PROGRESS.npz")
     
-    #agent.save("c:\\users\\benjaminsullivan\\downloads\\checkpoint3.npz")
+    #agent.save("c:\\users\\benjaminsullivan\\downloads\\checkpoint is99.npz")
 
 if __name__ == "__main__":
     main()
