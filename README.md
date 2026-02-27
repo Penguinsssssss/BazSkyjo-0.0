@@ -1,6 +1,13 @@
 # BazSkyjo-0.0
 Benjamin Sullivan Flex Friday project 2025/2026
 
+## Feb. 27
+- Agent now learns very well
+- Changed reward function to reward getting 2/3 of a set
+- Changed replaybuffer error to only store np.array
+- Changed activation function for advantage and value heads from relu -> linear
+- Uploaded basic agent (avg score of 35)
+
 ## Feb. 13
 - Spent whole day trying different combinations of reward functions and brain settings
   - 1 -> 2 -> 3 hidden layers
