@@ -1,6 +1,12 @@
 # BazSkyjo-0.0
 Benjamin Sullivan Flex Friday project 2025/2026
 
+## Mar. 6
+- Altered reward function
+  - (Expected score of previous hand) - (expected score of current hand)
+  - Converges to avg score of 32 in only 3000 episodes (10x faster)
+  - Does not converge to a better score after
+
 ## Feb. 27
 - Agent now learns very well
 - Changed reward function to reward getting 2/3 of a set
