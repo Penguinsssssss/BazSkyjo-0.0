@@ -6,7 +6,7 @@ import numpy as np #type: ignore
 #seed = random.randint(0, 9999)
 #np.random.seed(seed)
 #print(f"Seed: {seed}")
-np.random.seed(2)
+np.random.seed(3)
 import copy
 from collections import deque
 from pandas import DataFrame
@@ -20,6 +20,12 @@ def expo(input): return np.exp(input) # exponent
 
 # derivative activaiton functions
 def d_relu(x): return (x > 0).astype(float) # rectified linear
+
+AGENT_PATH = "c:\\users\\benjaminsullivan\\downloads\\checkpoint Reward Change middle epsilon.npz"
+isLoading = False
+SAVE_PATH = "c:\\users\\benjaminsullivan\\downloads\\checkpoint Reward Change middle take 2.npz"
+isSaving = True
+isDebug = False
 
 class DuelingDQN:
     
@@ -608,6 +614,7 @@ class Skyjo_Env(Environment):
         
         # cards for self
         self.hand = [self.deck.pop(), self.deck.pop(), None, None, None, None, None, None, None, None, None, None]
+        self.phand = copy.deepcopy(self.hand)
         
         self.phase = "main"
         self.pendingcard = None
@@ -703,6 +710,7 @@ class Skyjo_Env(Environment):
                 else: self.discard = self.hand[action] # place known card into discard
                 
                 # change hand
+                self.phand = copy.deepcopy(self.hand)
                 self.hand[action] = card
                 
                 self.phase = "main"
@@ -718,6 +726,7 @@ class Skyjo_Env(Environment):
                     self.discard = self.deck.pop()
                 else: self.discard = self.hand[action] # place known card into discard
                 
+                self.phand = copy.deepcopy(self.hand)
                 self.hand[action] = self.pendingcard
             
             else: # REJECT CARD
@@ -728,6 +737,7 @@ class Skyjo_Env(Environment):
                 self.discard = self.pendingcard
                 
                 # reveal card
+                self.phand = copy.deepcopy(self.hand)
                 self.hand[action - 12] = self.deck.pop()
             
             self.pendingcard = None
@@ -773,9 +783,27 @@ class Skyjo_Env(Environment):
     
     def calcreward(self):
         
-        reward = 0
-        #avg = sum(self.deck) / len(self.deck)
+        avg = sum(self.deck) / len(self.deck)
         
+        pExpected = 0
+        for i in range(4):
+        
+            card1 = self.phand[i]
+            card2 = self.phand[i + 4]
+            card3 = self.phand[i + 8]
+            
+            if card1 == card2 == card3 and card1 is not None: # if column is same card and not unknowns
+                pExpected -= 50
+                self.dbg("added 50 reward due to row!")
+            elif (card1 == card2 and card1 is not None) or (card1 == card3 and card1 is not None) or (card2 == card3 and card2 is not None): # check if any two cards are the same
+                pExpected -= 10
+                self.dbg("added 10 reward due to double!")
+            else: # otherwise
+                pExpected += card1 if card1 is not None else avg # add either value of card or average of unknowns
+                pExpected += card2 if card2 is not None else avg
+                pExpected += card3 if card3 is not None else avg
+        
+        cExpected = 0
         for i in range(4):
         
             card1 = self.hand[i]
@@ -783,17 +811,20 @@ class Skyjo_Env(Environment):
             card3 = self.hand[i + 8]
             
             if card1 == card2 == card3 and card1 is not None: # if column is same card and not unknowns
-                reward += 50
+                cExpected -= 50
                 self.dbg("added 50 reward due to row!")
             elif (card1 == card2 and card1 is not None) or (card1 == card3 and card1 is not None) or (card2 == card3 and card2 is not None): # check if any two cards are the same
-                reward += 10
+                cExpected -= 10
                 self.dbg("added 10 reward due to double!")
             else: # otherwise
-                reward -= card1 if card1 is not None else 2 # add either value of card or average of unknowns
-                reward -= card2 if card2 is not None else 2
-                reward -= card3 if card3 is not None else 2
+                cExpected += card1 if card1 is not None else avg # add either value of card or average of unknowns
+                cExpected += card2 if card2 is not None else avg
+                cExpected += card3 if card3 is not None else avg
         
-        self.dbg(f"reward for this turn is {reward}")
+        reward = pExpected - cExpected
+        self.dbg(f"reward for this turn is {reward} (pexpected: {pExpected} cexpected: {cExpected})")
+        self.dbg(f"hand {self.hand}")
+        self.dbg(f"phand {self.phand}")
         return reward
     
     def get_legal_actions(self):
@@ -826,7 +857,8 @@ class Skyjo_Env(Environment):
                 score += self.hand[i] if self.hand[i] is not None else self.deck.pop() # add either value of card or average of unknowns
                 score += self.hand[i + 4] if self.hand[i + 4] is not None else self.deck.pop()
                 score += self.hand[i + 8] if self.hand[i + 8] is not None else self.deck.pop()
-                
+        
+        if self.debug: self.dbg(f"Score: {score}")
         return score
     
     def dbg(self, msg):
@@ -834,12 +866,14 @@ class Skyjo_Env(Environment):
 
 def main():
     
-    # env and model settings
-    env = Skyjo_Env(debug=False)
-    agent = DuelingDQN(env.state_size, env.action_size, epsilon_decay=0.99995, epsilon_min=0.01) # set agent size to fit env
-    agent.load("c:\\users\\benjaminsullivan\\downloads\\checkpoint PROGRESS.npz",)
+    print("program running")
     
-    episodes = 100000
+    # env and model settings
+    env = Skyjo_Env(debug=isDebug)
+    agent = DuelingDQN(env.state_size, env.action_size, epsilon_decay=0.99999, epsilon_min=0.01) # set agent size to fit env
+    if isLoading: agent.load(AGENT_PATH) # else start fresh with a new agent
+    
+    episodes = 50000
     max_steps = 1000
     
     # data collection settings
@@ -901,9 +935,60 @@ def main():
             episode_scores = []
             total_episode_score = 0
             
-            agent.save("c:\\users\\benjaminsullivan\\downloads\\checkpoint PROGRESS.npz")
-    
-    #agent.save("c:\\users\\benjaminsullivan\\downloads\\checkpoint is99.npz")
+            if isSaving: agent.save(SAVE_PATH)
 
 if __name__ == "__main__":
     main()
+
+"""
+def calcreward(self):
+        
+        reward = 0
+        avg = sum(self.deck) / len(self.deck)
+        
+        for i in range(4):
+        
+            card1 = self.hand[i]
+            card2 = self.hand[i + 4]
+            card3 = self.hand[i + 8]
+            
+            if card1 == card2 == card3 and card1 is not None: # if column is same card and not unknowns
+                reward += 50
+                self.dbg("added 50 reward due to row!")
+            elif (card1 == card2 and card1 is not None) or (card1 == card3 and card1 is not None) or (card2 == card3 and card2 is not None): # check if any two cards are the same
+                reward += 10
+                self.dbg("added 10 reward due to double!")
+            else: # otherwise
+                reward -= card1 if card1 is not None else 2 # add either value of card or average of unknowns
+                reward -= card2 if card2 is not None else 2
+                reward -= card3 if card3 is not None else 2
+        
+        self.dbg(f"reward for this turn is {reward}")
+        return reward
+
+"""
+
+"""
+Episode 200: epsilon=0.010, avg_reward=52.770, avg_game_score=42.691542288557216
+Episode 400: epsilon=0.010, avg_reward=63.355, avg_game_score=40.22
+Episode 600: epsilon=0.010, avg_reward=62.859, avg_game_score=38.36
+Episode 800: epsilon=0.010, avg_reward=58.374, avg_game_score=38.95
+Episode 1000: epsilon=0.010, avg_reward=54.613, avg_game_score=41.025
+Episode 1200: epsilon=0.010, avg_reward=54.586, avg_game_score=39.555
+Episode 1400: epsilon=0.010, avg_reward=58.190, avg_game_score=41.36
+Episode 1600: epsilon=0.010, avg_reward=55.283, avg_game_score=41.735
+Episode 1800: epsilon=0.010, avg_reward=57.721, avg_game_score=39.53
+Episode 2000: epsilon=0.010, avg_reward=50.512, avg_game_score=41.93
+Episode 2200: epsilon=0.010, avg_reward=54.224, avg_game_score=40.685
+Episode 2400: epsilon=0.010, avg_reward=48.242, avg_game_score=41.26
+Episode 2600: epsilon=0.010, avg_reward=46.489, avg_game_score=42.95
+Episode 2800: epsilon=0.010, avg_reward=44.577, avg_game_score=43.715
+Episode 3000: epsilon=0.010, avg_reward=43.514, avg_game_score=41.52
+Episode 3200: epsilon=0.010, avg_reward=47.184, avg_game_score=41.645
+Episode 3400: epsilon=0.010, avg_reward=49.623, avg_game_score=41.24
+Episode 3600: epsilon=0.010, avg_reward=50.055, avg_game_score=42.025
+Episode 3800: epsilon=0.010, avg_reward=48.845, avg_game_score=43.385
+Episode 4000: epsilon=0.010, avg_reward=55.899, avg_game_score=42.155
+Episode 4200: epsilon=0.010, avg_reward=57.383, avg_game_score=39.615
+Episode 4400: epsilon=0.010, avg_reward=61.676, avg_game_score=37.14
+"""
