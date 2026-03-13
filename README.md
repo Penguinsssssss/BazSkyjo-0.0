@@ -1,6 +1,12 @@
 # BazSkyjo-0.0
 Benjamin Sullivan Flex Friday project 2025/2026
 
+## Mar. 13
+- Low progress day
+- Removed unecessary encoded information (input size 42 -> 18)
+- Tried different brain sizes (64, 128, 256)
+  - Little to no improvement
+
 ## Mar. 6
 - Altered reward function
   - (Expected score of previous hand) - (expected score of current hand)
