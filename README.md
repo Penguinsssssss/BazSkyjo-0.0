@@ -1,6 +1,10 @@
 # BazSkyjo-0.0
 Benjamin Sullivan Flex Friday project 2025/2026
 
+## Mar. 27
+- Began working on manim scenes
+- No code updates
+
 ## Mar. 13
 - Low progress day
 - Removed unecessary encoded information (input size 42 -> 18)
