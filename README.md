@@ -1,6 +1,16 @@
 # BazSkyjo-0.0
 Benjamin Sullivan Flex Friday project 2025/2026
 
+## May. 1
+- Fixed bug with allowing illegal actions in replaybuffer
+- Changed reward function to stop artificially rewarding doubles and triples
+- Removed upstream + downstream opponent information
+- Added double, triple, and sum counter to encode_state
+- Normalized values from encode_state
+- Fixed apply epsilon decay each step rather than each episode
+- Replaced scoring unknown cards with avg value not random value
+- New best avg score from 1000 games (22.3 avg score)
+
 ## Mar. 27
 - Began working on manim scenes
 - No code updates
