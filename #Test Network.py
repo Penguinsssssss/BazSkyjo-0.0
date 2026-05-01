@@ -21,9 +21,9 @@ def expo(input): return np.exp(input) # exponent
 # derivative activaiton functions
 def d_relu(x): return (x > 0).astype(float) # rectified linear
 
-AGENT_PATH = "c:\\users\\benjaminsullivan\\downloads\\checkpoint Reward Change middle epsilon.npz"
+AGENT_PATH = "c:\\users\\benjaminsullivan\\downloads\\checkpoint action 12 fix.npz"
 isLoading = False
-SAVE_PATH = "c:\\users\\benjaminsullivan\\downloads\\checkpoint Reward Change middle take 2.npz"
+SAVE_PATH = "c:\\users\\benjaminsullivan\\downloads\\checkpoint action 12 fix.npz"
 isSaving = True
 isDebug = False
 
@@ -45,7 +45,7 @@ class DuelingDQN:
         self.replayBuffer = ReplayBuffer(50000) # capacity
         
         # main network
-        self.model = Network([state_size, 128, 128, 32], action_size)
+        self.model = Network([state_size, 256, 256, 32], action_size)
         
         # target network
         self.target_model = copy.deepcopy(self.model)
@@ -74,7 +74,7 @@ class DuelingDQN:
     def compute_targets(self, batch):
         
         # get batch
-        states, actions, rewards, next_states, dones = batch
+        states, actions, rewards, next_states, dones, next_legal_actions = batch
         
         q_vals = self.model.calculate(states)
         
@@ -92,9 +92,12 @@ class DuelingDQN:
             if dones[i]:
                 targets[i, actions[i]] = rewards[i]
             else:
-                targets[i, actions[i]] = rewards[i] + \
-                    self.gamma * target_next_q[i, best_actions[i]]
-                    
+                
+                masked_next_q = np.full(self.action_size, -1e9)
+                masked_next_q[next_legal_actions[i]] = main_next_q[i, next_legal_actions[i]]
+                best_action = np.argmax(masked_next_q)
+                targets[i, actions[i]] = rewards[i] + self.gamma * target_next_q[i, best_action]
+                
         return targets
     
     def train_step(self, batch_size=32):
@@ -106,16 +109,13 @@ class DuelingDQN:
         batch = self.replayBuffer.sample(batch_size)
         
         # unpack batch
-        states, actions, rewards, next_states, dones = batch
+        states, actions, rewards, next_states, dones, next_legal_actions = batch
         
         # generate training targets using bellman equation
         targets = self.compute_targets(batch)
         
         # run backwards on network
         self.model.backprop(states, targets, lr=self.lr)
-        
-        # reduce epsilon (exploration value)
-        self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         
         # use soft updates to avoid instability
         self.soft_update()
@@ -361,10 +361,10 @@ class ReplayBuffer:
         # deque automatically deletes the oldest entry once it runs out of space
         self.buffer = deque(maxlen=capacity)
     
-    def push(self, state, action, reward, next_state, done):
+    def push(self, state, action, reward, next_state, done, next_legal_action):
         
         # collects state
-        self.buffer.append((state, action, reward, next_state, done))
+        self.buffer.append((state, action, reward, next_state, done, next_legal_action))
     
     def __len__(self):
         return len(self.buffer)
@@ -373,13 +373,14 @@ class ReplayBuffer:
         
         # provides rl with sample of "experiences"
         batch = random.sample(self.buffer, batch_size)
-        states, actions, rewards, next_states, dones = zip(*batch)
+        states, actions, rewards, next_states, dones, next_legal_actions = zip(*batch)
         
         return (np.array(states),
                 np.array(actions),
                 np.array(rewards),
                 np.array(next_states),
-                np.array(dones)) # shape (batch, state_size)
+                np.array(dones), # shape (batch, state_size)
+                list(next_legal_actions))
 
 class Environment:
     
@@ -587,8 +588,8 @@ class Skyjo_Env(Environment):
     
     def __init__(self, debug=False):
         
-        super().__init__(state_size=42, action_size=24)
-        # 12 cards, 12 for upstream player, 12 for downstream player, 1 for discard, 1 for number of players, 1 for avg value of deck, 1 for lowest unknowns of any player, 1 for pending card, 1 for phase
+        super().__init__(state_size=30, action_size=24)
+        # 12 cards, 1 for discard, 1 for number of players, 1 for avg value of deck, 1 for lowest unknowns of any player, 1 for pending card, 1 for phase
         
         self.debug = debug
         
@@ -623,26 +624,48 @@ class Skyjo_Env(Environment):
         
         return self.encode_state()
     
+    def norm(self, card):
+        if card is None: return 1.0 # sentinel
+        else: return (card + 2) / 15 # norm value
+    
     def encode_state(self):
         
-        own = [self.enc_card(i) for i in self.hand]
-        down = [self.enc_card(i) for i in self.hands[0]]
-        up = [self.enc_card(i) for i in self.hands[-1]]
+        own = [self.norm(i) for i in self.hand]
+        avg = self.norm(sum(self.deck) / len(self.deck))
+        
+        doubles = []
+        for i in range(4):
+        
+            if ((self.hand[i] == self.hand[i + 4]) or (self.hand[i+8] == self.hand[i + 4]) or (self.hand[i] == self.hand[i + 8])) and (self.hand[i] is not None) and (self.hand[i+4] is not None): # if column is same card and not unknowns
+                doubles.append(1)
+            else: doubles.append(0)
+        
+        
+        triples = []
+        
+        # check for triple
+        for i in range(4):
+        
+            if self.hand[i] == self.hand[i + 4] == self.hand[i + 8] and self.hand[i] is not None: # if column is same card and not unknowns
+                triples.append(1)
+            else: triples.append(0)
+        
+        sums = []
+        for i in range(4):
+            sums.append((self.hand[i] if self.hand[i] is not None else avg + self.hand[i+4] if self.hand[i+4] is not None else avg + self.hand[i+8] if self.hand[i+8] is not None else avg + 6) / 45)
         
         return (
             own + # own cards
-            down + # downstream player's cards
-            up + # upstream player's cards
-            [self.discard] + # dicard card
-            [self.numplayers] + # number of players
-            [sum(self.deck) / len(self.deck)] + # average value of unknown
-            [min(sum(card is None for card in hand) for hand in self.hands)] + # lowest number of unknowns for any opposing player
-            [self.pendingcard if self.phase == "pending" else 13] + # gives bot pending card if held
-            [1 if self.phase == "pending" else 0]
+            [self.norm(self.discard + 2)] + # dicard card
+            [self.numplayers / 6] + # number of players
+            [avg] + # average value of unknown
+            [(min(sum(card is None for card in hand) for hand in self.hands)) / 12] + # lowest number of unknowns for any opposing player
+            [self.norm(self.pendingcard) if self.phase == "pending" else 1.0] + # gives bot pending card if held
+            [1 if self.phase == "pending" else 0] +
+            doubles +
+            triples +
+            sums
         )
-    
-    def enc_card(self, card):
-            return float(card) if card is not None else 13.0  # sentinel for unknown
     
     def step(self, action):
         
@@ -651,7 +674,6 @@ class Skyjo_Env(Environment):
         self.dbg(f"baz hand: {self.hand[4:8]}")
         self.dbg(f"baz hand: {self.hand[8:]}")
         self.dbg(f"discard: {self.discard}")
-        self.dbg(f"next card: {self.deck[0]}")
         
         # if any players have 0 unknowns or deck is empty
         if min(sum(card is None for card in hand) for hand in self.hands) == 0 or sum(card is None for card in self.hand) == 0 or len(self.deck) == 0:
@@ -665,11 +687,17 @@ class Skyjo_Env(Environment):
         # init reward
         self.reward = 0
         
+        prior_phase = self.phase
+        self.phand = copy.deepcopy(self.hand)
+        
         # agent acts
         self.act(action)
         
         # calculate reward
-        self.reward = self.calcreward()
+        if prior_phase == "main" and action == 12:
+            self.reward = 0.0
+        else:
+            self.reward = self.calcreward()
         
         # return state if pending
         if self.phase == "pending":
@@ -700,6 +728,7 @@ class Skyjo_Env(Environment):
             else: # TAKE FROM DISCARD
                 
                 self.dbg(f"Action {action} chosen (discard to x) discard is: {self.discard}")
+                self.dbg("\n------------------------------")
                 
                 # store discard
                 card = self.discard
@@ -710,7 +739,6 @@ class Skyjo_Env(Environment):
                 else: self.discard = self.hand[action] # place known card into discard
                 
                 # change hand
-                self.phand = copy.deepcopy(self.hand)
                 self.hand[action] = card
                 
                 self.phase = "main"
@@ -720,24 +748,24 @@ class Skyjo_Env(Environment):
             if action < 12: # ACCEPT CARD
                 
                 self.dbg(f"chosen to accept pendingcard to slot {action}")
+                self.dbg("\n------------------------------")
                 
                 # place the unknown into the discard
                 if self.hand[action] is None:
                     self.discard = self.deck.pop()
                 else: self.discard = self.hand[action] # place known card into discard
                 
-                self.phand = copy.deepcopy(self.hand)
                 self.hand[action] = self.pendingcard
             
             else: # REJECT CARD
                 
                 self.dbg(f"chosen to reject pendingcard and reveal slot {action - 12}")
+                self.dbg("\n------------------------------")
                 
                 # discard rejected card
                 self.discard = self.pendingcard
                 
                 # reveal card
-                self.phand = copy.deepcopy(self.hand)
                 self.hand[action - 12] = self.deck.pop()
             
             self.pendingcard = None
@@ -793,10 +821,10 @@ class Skyjo_Env(Environment):
             card3 = self.phand[i + 8]
             
             if card1 == card2 == card3 and card1 is not None: # if column is same card and not unknowns
-                pExpected -= 50
+                pExpected -= 0
                 self.dbg("added 50 reward due to row!")
             elif (card1 == card2 and card1 is not None) or (card1 == card3 and card1 is not None) or (card2 == card3 and card2 is not None): # check if any two cards are the same
-                pExpected -= 10
+                pExpected -= 0
                 self.dbg("added 10 reward due to double!")
             else: # otherwise
                 pExpected += card1 if card1 is not None else avg # add either value of card or average of unknowns
@@ -811,10 +839,10 @@ class Skyjo_Env(Environment):
             card3 = self.hand[i + 8]
             
             if card1 == card2 == card3 and card1 is not None: # if column is same card and not unknowns
-                cExpected -= 50
+                cExpected -= 0
                 self.dbg("added 50 reward due to row!")
             elif (card1 == card2 and card1 is not None) or (card1 == card3 and card1 is not None) or (card2 == card3 and card2 is not None): # check if any two cards are the same
-                cExpected -= 10
+                cExpected -= 0
                 self.dbg("added 10 reward due to double!")
             else: # otherwise
                 cExpected += card1 if card1 is not None else avg # add either value of card or average of unknowns
@@ -822,9 +850,6 @@ class Skyjo_Env(Environment):
                 cExpected += card3 if card3 is not None else avg
         
         reward = pExpected - cExpected
-        self.dbg(f"reward for this turn is {reward} (pexpected: {pExpected} cexpected: {cExpected})")
-        self.dbg(f"hand {self.hand}")
-        self.dbg(f"phand {self.phand}")
         return reward
     
     def get_legal_actions(self):
@@ -848,15 +873,16 @@ class Skyjo_Env(Environment):
     def score_game(self):
         
         score = 0
+        unknown = sum(self.deck) / len(self.deck) if len(self.deck) > 0 else 5
         
         for i in range(4):
         
             if self.hand[i] == self.hand[i + 4] == self.hand[i + 8] and self.hand[i] is not None: # if column is same card and not unknowns
                 pass # add zero to score
             else: # otherwise
-                score += self.hand[i] if self.hand[i] is not None else self.deck.pop() # add either value of card or average of unknowns
-                score += self.hand[i + 4] if self.hand[i + 4] is not None else self.deck.pop()
-                score += self.hand[i + 8] if self.hand[i + 8] is not None else self.deck.pop()
+                score += self.hand[i] if self.hand[i] is not None else unknown # add either value of card or average of unknowns
+                score += self.hand[i + 4] if self.hand[i + 4] is not None else unknown
+                score += self.hand[i + 8] if self.hand[i + 8] is not None else unknown
         
         if self.debug: self.dbg(f"Score: {score}")
         return score
@@ -870,8 +896,8 @@ def main():
     
     # env and model settings
     env = Skyjo_Env(debug=isDebug)
-    agent = DuelingDQN(env.state_size, env.action_size, epsilon_decay=0.99999, epsilon_min=0.01) # set agent size to fit env
-    if isLoading: agent.load(AGENT_PATH) # else start fresh with a new agent
+    agent = DuelingDQN(env.state_size, env.action_size, epsilon_decay=0.9995, epsilon_min=0.01) # set agent size to fit env
+    if isLoading: agent.load(AGENT_PATH, load_epsilon=True) # else start fresh with a new agent
     
     episodes = 50000
     max_steps = 1000
@@ -884,7 +910,7 @@ def main():
     scores = []
     
     # visual indicator for impacient humans
-    num_logs = 100
+    num_logs = 250
     
     for ep in range(episodes):
         
@@ -905,8 +931,10 @@ def main():
             
             episode_reward += reward
             
+            next_legal_actions = env.get_legal_actions() if not done else []
+            
             # save state to replaybuffer
-            agent.replayBuffer.push(state, action, reward, next_state, done)
+            agent.replayBuffer.push(state, action, reward, next_state, done, next_legal_actions)
             
             # run a training step
             agent.train_step(batch_size=32)
@@ -917,6 +945,8 @@ def main():
             # if game is over stop loop and start new game
             if done:
                 break
+        
+        agent.epsilon = max(agent.epsilon_min, agent.epsilon * agent.epsilon_decay)
         
         score = env.score_game()
         episode_scores.append(score)
