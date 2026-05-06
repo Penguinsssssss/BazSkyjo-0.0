@@ -1,6 +1,17 @@
 # BazSkyjo-0.0
 Benjamin Sullivan Flex Friday project 2025/2026
 
+## May. 6
+- Changed input neuron shape
+  - Main phase 12 -> 2 neurons
+  - Either take draw pile or take discard pile
+- Changed reward function
+  - More heaviliy rewards replacing higher values rather than reward each gap differently
+  - Example 12 -> 10 now worth more than 4 -> 2
+- Experimented with brain size
+  - 256, 256, 32 -> 512, 512, 512, 64
+- Average score improved from 26 -> 14
+
 ## May. 1
 - Fixed bug with allowing illegal actions in replaybuffer
 - Changed reward function to stop artificially rewarding doubles and triples
