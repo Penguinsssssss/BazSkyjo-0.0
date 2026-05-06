@@ -3,10 +3,10 @@
 import random
 import math
 import numpy as np #type: ignore
-#seed = random.randint(0, 9999)
-#np.random.seed(seed)
-#print(f"Seed: {seed}")
-np.random.seed(3)
+seed = random.randint(0, 9999)
+np.random.seed(seed)
+print(f"Seed: {seed}")
+#np.random.seed(3)
 import copy
 from collections import deque
 from pandas import DataFrame
@@ -21,11 +21,11 @@ def expo(input): return np.exp(input) # exponent
 # derivative activaiton functions
 def d_relu(x): return (x > 0).astype(float) # rectified linear
 
-AGENT_PATH = "c:\\users\\benjaminsullivan\\downloads\\checkpoint action 12 fix.npz"
-isLoading = False
-SAVE_PATH = "c:\\users\\benjaminsullivan\\downloads\\checkpoint action 12 fix.npz"
-isSaving = True
-isDebug = False
+isDebug = True
+AGENT_PATH = "c:\\users\\benjaminsullivan\\downloads\\checkpoint big brain.npz"
+isLoading = isDebug
+SAVE_PATH = AGENT_PATH
+isSaving = not isDebug
 
 class DuelingDQN:
     
@@ -45,7 +45,7 @@ class DuelingDQN:
         self.replayBuffer = ReplayBuffer(50000) # capacity
         
         # main network
-        self.model = Network([state_size, 256, 256, 32], action_size)
+        self.model = Network([state_size, 512, 512, 512, 64], action_size) # 256, 256, 32
         
         # target network
         self.target_model = copy.deepcopy(self.model)
@@ -59,7 +59,7 @@ class DuelingDQN:
         masked_q[legal_actions] = q_values[legal_actions]
         
         # "exploration", allows the model to sometimes choose a fully random action to get itself out of local minima
-        if np.random.rand() < self.epsilon:
+        if (np.random.rand() < self.epsilon) and not isDebug:
             action = int(random.choice(legal_actions))
         
         # "explotation", the model chooses the action it thinks is best and gets the results
@@ -622,6 +622,8 @@ class Skyjo_Env(Environment):
         
         self.done = False
         
+        self.bonus = 0
+        
         return self.encode_state()
     
     def norm(self, card):
@@ -656,7 +658,7 @@ class Skyjo_Env(Environment):
         
         return (
             own + # own cards
-            [self.norm(self.discard + 2)] + # dicard card
+            [self.norm(self.discard)] + # dicard card
             [self.numplayers / 6] + # number of players
             [avg] + # average value of unknown
             [(min(sum(card is None for card in hand) for hand in self.hands)) / 12] + # lowest number of unknowns for any opposing player
@@ -669,11 +671,12 @@ class Skyjo_Env(Environment):
     
     def step(self, action):
         
-        self.dbg("")
-        self.dbg(f"baz hand: {self.hand[:4]}")
-        self.dbg(f"baz hand: {self.hand[4:8]}")
-        self.dbg(f"baz hand: {self.hand[8:]}")
-        self.dbg(f"discard: {self.discard}")
+        if self.phase == "main":
+            self.dbg("")
+            self.dbg(f"baz hand: {self.hand[:4]}")
+            self.dbg(f"baz hand: {self.hand[4:8]}")
+            self.dbg(f"baz hand: {self.hand[8:]}")
+            self.dbg(f"discard: {self.discard}")
         
         # if any players have 0 unknowns or deck is empty
         if min(sum(card is None for card in hand) for hand in self.hands) == 0 or sum(card is None for card in self.hand) == 0 or len(self.deck) == 0:
@@ -712,40 +715,32 @@ class Skyjo_Env(Environment):
         
         # main: 0-11 discard -> hand, 12 reveal top of deck
         # pending: 0-11 pending -> hand, 12-23 pending -> discard + reveal one card in hand
-        
         if self.phase == "main":
             
-            if action == 12: # TAKE FROM DRAW
+            if action == 0: # TAKE FROM DRAW
                 
                 # draw card from deck and query dqn
-                self.phase = "pending"
+                
                 self.pendingcard = self.deck.pop()
                 
-                self.dbg(f"Action 12 (draw) chosen (card {self.pendingcard})")
-                
-                return
+                self.dbg(f"Action 0 (draw) chosen (card {self.pendingcard})")
             
             else: # TAKE FROM DISCARD
                 
-                self.dbg(f"Action {action} chosen (discard to x) discard is: {self.discard}")
-                self.dbg("\n------------------------------")
+                self.dbg(f"Action 1 chosen (take discard) discard is: {self.discard}")
+                #self.dbg("\n------------------------------")
                 
                 # store discard
-                card = self.discard
-                
-                # place the unknown into the discard
-                if self.hand[action] is None:
-                    self.discard = self.deck.pop()
-                else: self.discard = self.hand[action] # place known card into discard
-                
-                # change hand
-                self.hand[action] = card
-                
-                self.phase = "main"
+                self.pendingcard = self.discard
+            
+            # set phase to pending after taking a card
+            self.phase = "pending"
         
         elif self.phase == "pending":
             
             if action < 12: # ACCEPT CARD
+                
+                self.bonus = self.calcbonus(action, self.hand[action], self.pendingcard, self.hand[action] is None)
                 
                 self.dbg(f"chosen to accept pendingcard to slot {action}")
                 self.dbg("\n------------------------------")
@@ -759,6 +754,8 @@ class Skyjo_Env(Environment):
             
             else: # REJECT CARD
                 
+                self.bonus = self.calcbonus(action - 12, None, 0, True)
+                
                 self.dbg(f"chosen to reject pendingcard and reveal slot {action - 12}")
                 self.dbg("\n------------------------------")
                 
@@ -770,6 +767,7 @@ class Skyjo_Env(Environment):
             
             self.pendingcard = None
             self.phase = "main"
+            if isDebug: input()
     
     def advanceopp(self):
         
@@ -809,6 +807,26 @@ class Skyjo_Env(Environment):
                 i[replacedidx] = self.deck.pop()
                 self.discard = replacedcard
     
+    def calcbonus(self, slot, old, new, wasUnknown):
+        
+        bonus = 0
+        
+        if wasUnknown:
+            bonus += 0
+        else:
+            bonus += ((old*abs(old)) - (new*abs(new))) / 60
+        
+        row = []
+        for i in range(3):
+            row.append(self.hand[(slot % 4) + (i * 4)])
+        
+        if row.count(new) >= 2:
+            bonus += 1
+            if row.count(new) == 3:
+                bonus += 10
+        
+        return bonus
+    
     def calcreward(self):
         
         avg = sum(self.deck) / len(self.deck)
@@ -821,11 +839,7 @@ class Skyjo_Env(Environment):
             card3 = self.phand[i + 8]
             
             if card1 == card2 == card3 and card1 is not None: # if column is same card and not unknowns
-                pExpected -= 0
-                self.dbg("added 50 reward due to row!")
-            elif (card1 == card2 and card1 is not None) or (card1 == card3 and card1 is not None) or (card2 == card3 and card2 is not None): # check if any two cards are the same
-                pExpected -= 0
-                self.dbg("added 10 reward due to double!")
+                pExpected += 0
             else: # otherwise
                 pExpected += card1 if card1 is not None else avg # add either value of card or average of unknowns
                 pExpected += card2 if card2 is not None else avg
@@ -839,24 +853,25 @@ class Skyjo_Env(Environment):
             card3 = self.hand[i + 8]
             
             if card1 == card2 == card3 and card1 is not None: # if column is same card and not unknowns
-                cExpected -= 0
-                self.dbg("added 50 reward due to row!")
-            elif (card1 == card2 and card1 is not None) or (card1 == card3 and card1 is not None) or (card2 == card3 and card2 is not None): # check if any two cards are the same
-                cExpected -= 0
-                self.dbg("added 10 reward due to double!")
+                cExpected += 0
             else: # otherwise
                 cExpected += card1 if card1 is not None else avg # add either value of card or average of unknowns
                 cExpected += card2 if card2 is not None else avg
                 cExpected += card3 if card3 is not None else avg
         
         reward = pExpected - cExpected
+        reward += self.bonus
+        
+        if self.done:
+            self.reward += -self.score_game()
+        
         return reward
     
     def get_legal_actions(self):
         
         if self.phase == "main":
             
-            return list(range(13))  # 0-11 discard->hand, 12 draw
+            return list(range(2))  # 0-11 discard->hand, 12 draw
         
         else:
             
@@ -868,6 +883,7 @@ class Skyjo_Env(Environment):
                 if self.hand[i] is None:
                     legal.append(12 + i)
                 
+            #print(legal)
             return legal
     
     def score_game(self):
@@ -899,7 +915,7 @@ def main():
     agent = DuelingDQN(env.state_size, env.action_size, epsilon_decay=0.9995, epsilon_min=0.01) # set agent size to fit env
     if isLoading: agent.load(AGENT_PATH, load_epsilon=True) # else start fresh with a new agent
     
-    episodes = 50000
+    episodes = 1 if isDebug else 10000
     max_steps = 1000
     
     # data collection settings
@@ -910,7 +926,7 @@ def main():
     scores = []
     
     # visual indicator for impacient humans
-    num_logs = 250
+    num_logs = 1000
     
     for ep in range(episodes):
         
@@ -970,55 +986,258 @@ def main():
 if __name__ == "__main__":
     main()
 
+""" EXAMPLE OF WEIRD BEHAVIOR
+Seed: 663
+program running
+
+baz hand: [7, 1, None, None]
+baz hand: [None, None, None, None]    
+baz hand: [None, None, None, None]    
+discard: 5
+Action 0 (draw) chosen (card 7)       
+chosen to accept pendingcard to slot 0
+
+------------------------------        
+
+
+baz hand: [7, 1, None, None]
+baz hand: [None, None, None, None]    
+baz hand: [None, None, None, None]    
+discard: 9
+Action 0 (draw) chosen (card 12)      
+chosen to accept pendingcard to slot 0
+
+------------------------------        
+
+
+baz hand: [12, 1, None, None]
+baz hand: [None, None, None, None]    
+baz hand: [None, None, None, None]    
+discard: 10
+Action 0 (draw) chosen (card 12)      
+chosen to accept pendingcard to slot 0
+
+------------------------------        
+
+
+baz hand: [12, 1, None, None]     
+baz hand: [None, None, None, None]
+baz hand: [None, None, None, None]
+discard: 6
+Action 0 (draw) chosen (card 6)
+chosen to accept pendingcard to slot 0
+
+------------------------------
+
+
+baz hand: [6, 1, None, None]
+baz hand: [None, None, None, None]
+baz hand: [None, None, None, None]
+discard: 10
+Action 0 (draw) chosen (card 4)
+chosen to accept pendingcard to slot 0
+
+------------------------------
+
+
+baz hand: [4, 1, None, None]
+baz hand: [None, None, None, None]
+baz hand: [None, None, None, None]
+discard: 1
+Action 1 chosen (take discard) discard is: 1
+chosen to accept pendingcard to slot 2
+
+------------------------------
+
+
+baz hand: [4, 1, 1, None]
+baz hand: [None, None, None, None]
+baz hand: [None, None, None, None]
+discard: 2
+Action 1 chosen (take discard) discard is: 2
+chosen to accept pendingcard to slot 0
+
+------------------------------
+
+
+baz hand: [2, 1, 1, None]
+baz hand: [None, None, None, None]
+baz hand: [None, None, None, None]
+discard: 6
+Action 0 (draw) chosen (card 8)
+chosen to reject pendingcard and reveal slot 11
+
+------------------------------
+
+
+baz hand: [2, 1, 1, None]
+baz hand: [None, None, None, None]
+baz hand: [None, None, None, 11]
+discard: 9
+Action 0 (draw) chosen (card 10)
+chosen to accept pendingcard to slot 3
+
+------------------------------
+
+
+baz hand: [2, 1, 1, 10]
+baz hand: [None, None, None, None]
+baz hand: [None, None, None, 11]
+discard: 1
+Action 1 chosen (take discard) discard is: 1
+chosen to accept pendingcard to slot 3      
+
+------------------------------
+
+
+baz hand: [2, 1, 1, 1]
+baz hand: [None, None, None, None]    
+baz hand: [None, None, None, 11]      
+discard: 11
+Action 0 (draw) chosen (card 0)       
+chosen to accept pendingcard to slot 6
+
+------------------------------        
+
+
+baz hand: [2, 1, 1, 1]
+baz hand: [None, None, 0, None]
+baz hand: [None, None, None, 11]
+discard: 12
+Action 0 (draw) chosen (card 8)
+chosen to reject pendingcard and reveal slot 9
+
+------------------------------
+
+
+baz hand: [2, 1, 1, 1]
+baz hand: [None, None, 0, None]
+baz hand: [None, -1, None, 11]
+discard: 9
+Action 0 (draw) chosen (card 0)
+chosen to accept pendingcard to slot 4
+
+------------------------------
+
+
+baz hand: [2, 1, 1, 1]
+baz hand: [0, None, 0, None]
+baz hand: [None, -1, None, 11]
+discard: 7
+Action 0 (draw) chosen (card 7)
+chosen to reject pendingcard and reveal slot 10
+
+------------------------------
+
+
+baz hand: [2, 1, 1, 1]
+baz hand: [0, None, 0, None]
+baz hand: [None, -1, 5, 11]
+discard: 1
+Action 1 chosen (take discard) discard is: 1
+chosen to accept pendingcard to slot 5
+
+------------------------------
+
+
+baz hand: [2, 1, 1, 1]
+baz hand: [0, 1, 0, None]
+baz hand: [None, -1, 5, 11]
+discard: 2
+Score: 33.325581395348834
 """
-def calcreward(self):
-        
-        reward = 0
-        avg = sum(self.deck) / len(self.deck)
-        
-        for i in range(4):
-        
-            card1 = self.hand[i]
-            card2 = self.hand[i + 4]
-            card3 = self.hand[i + 8]
-            
-            if card1 == card2 == card3 and card1 is not None: # if column is same card and not unknowns
-                reward += 50
-                self.dbg("added 50 reward due to row!")
-            elif (card1 == card2 and card1 is not None) or (card1 == card3 and card1 is not None) or (card2 == card3 and card2 is not None): # check if any two cards are the same
-                reward += 10
-                self.dbg("added 10 reward due to double!")
-            else: # otherwise
-                reward -= card1 if card1 is not None else 2 # add either value of card or average of unknowns
-                reward -= card2 if card2 is not None else 2
-                reward -= card3 if card3 is not None else 2
-        
-        self.dbg(f"reward for this turn is {reward}")
-        return reward
 
 """
+Episode 100: epsilon=0.951, avg_reward=22.917, avg_game_score=62.20736142397325
+Episode 200: epsilon=0.904, avg_reward=5.949, avg_game_score=63.49193643209338
+Episode 300: epsilon=0.860, avg_reward=41.209, avg_game_score=59.918043408188396
+Episode 400: epsilon=0.818, avg_reward=36.518, avg_game_score=58.5174557875186
+Episode 500: epsilon=0.778, avg_reward=35.183, avg_game_score=57.874610522368805
+Episode 600: epsilon=0.740, avg_reward=30.912, avg_game_score=58.61300736444958
+Episode 700: epsilon=0.704, avg_reward=48.467, avg_game_score=55.673812938202545
+Episode 1600: epsilon=0.449, avg_reward=106.802, avg_game_score=49.287830645580524603                                                                       8355
+Episode 1700: epsilon=0.427, avg_reward=101.043, avg_game_score=47.57738998896054388624                                                                      72
+Episode 1800: epsilon=0.406, avg_reward=103.993, avg_game_score=48.917126987255353534                                                                      9282
+Episode 1900: epsilon=0.386, avg_reward=109.479, avg_game_score=47.171802884813189444                                                                       3288
+Episode 2000: epsilon=0.368, avg_reward=115.109, avg_game_score=46.63279900746763       
+Episode 2100: epsilon=0.350, avg_reward=130.684, avg_game_score=44.4612071001415        
+Episode 2200: epsilon=0.333, avg_reward=133.569, avg_game_score=45.28799937544024       
+Episode 2300: epsilon=0.316, avg_reward=119.298, avg_game_score=46.06359462875291       
+Episode 2400: epsilon=0.301, avg_reward=123.850, avg_game_score=45.39479670696697       
+Episode 2500: epsilon=0.286, avg_reward=124.104, avg_game_score=45.50637402805091       
+Episode 2600: epsilon=0.272, avg_reward=134.636, avg_game_score=43.86509009518008       
+Episode 2700: epsilon=0.259, avg_reward=116.228, avg_game_score=46.40203502293707       
+Episode 2800: epsilon=0.246, avg_reward=125.410, avg_game_score=45.6886547494982
+Episode 2900: epsilon=0.234, avg_reward=139.801, avg_game_score=45.52583906869402
+Episode 3000: epsilon=0.223, avg_reward=126.701, avg_game_score=45.868907662744185
+Episode 3100: epsilon=0.212, avg_reward=148.628, avg_game_score=44.38179654430128
+Episode 3200: epsilon=0.202, avg_reward=160.407, avg_game_score=43.581100156305325
+Episode 3300: epsilon=0.192, avg_reward=150.847, avg_game_score=42.154951571824746
+Episode 3400: epsilon=0.183, avg_reward=146.649, avg_game_score=43.9246487631625
+Episode 3500: epsilon=0.174, avg_reward=154.558, avg_game_score=42.34712513661359
+Episode 3600: epsilon=0.165, avg_reward=151.229, avg_game_score=45.541040029288006
+Episode 3700: epsilon=0.157, avg_reward=162.648, avg_game_score=43.58571520615299
+Episode 3800: epsilon=0.149, avg_reward=145.970, avg_game_score=41.95216344221138
+Episode 3900: epsilon=0.142, avg_reward=160.241, avg_game_score=42.189632556338694
+Episode 4000: epsilon=0.135, avg_reward=175.034, avg_game_score=40.726473335973054
+Episode 4100: epsilon=0.129, avg_reward=188.014, avg_game_score=40.52867224402437
+Episode 4200: epsilon=0.122, avg_reward=172.673, avg_game_score=41.1131126347178
+Episode 4300: epsilon=0.116, avg_reward=166.961, avg_game_score=42.14628996756894
+Episode 4400: epsilon=0.111, avg_reward=175.820, avg_game_score=40.22487373280322
+Episode 4500: epsilon=0.105, avg_reward=169.503, avg_game_score=40.679736432316616
+Episode 4600: epsilon=0.100, avg_reward=155.307, avg_game_score=41.4257863302418
+Episode 4700: epsilon=0.095, avg_reward=170.475, avg_game_score=43.488228539222376
+Episode 4800: epsilon=0.091, avg_reward=163.409, avg_game_score=44.1445303411669
+Episode 4900: epsilon=0.086, avg_reward=160.063, avg_game_score=41.54665343147094
+Episode 5000: epsilon=0.082, avg_reward=183.165, avg_game_score=41.68448517134585
+Episode 5100: epsilon=0.078, avg_reward=184.073, avg_game_score=40.972212350595534
+Episode 5200: epsilon=0.074, avg_reward=189.533, avg_game_score=42.15726094512238
+Episode 5300: epsilon=0.071, avg_reward=151.270, avg_game_score=41.873834217216434
+Episode 5400: epsilon=0.067, avg_reward=188.744, avg_game_score=39.33045617167505
+Episode 5500: epsilon=0.064, avg_reward=210.797, avg_game_score=40.41452049603706
+Episode 5600: epsilon=0.061, avg_reward=217.982, avg_game_score=37.25239355299875
+Episode 5700: epsilon=0.058, avg_reward=189.316, avg_game_score=39.30069709459023
+Episode 5800: epsilon=0.055, avg_reward=188.436, avg_game_score=38.14250070076673
+Episode 5900: epsilon=0.052, avg_reward=214.966, avg_game_score=36.05841693325761
+Episode 6000: epsilon=0.050, avg_reward=217.971, avg_game_score=36.516627744330656
+Episode 6100: epsilon=0.047, avg_reward=219.392, avg_game_score=40.47136115475816
+Episode 6200: epsilon=0.045, avg_reward=214.317, avg_game_score=39.77284513579341
+Episode 6300: epsilon=0.043, avg_reward=213.587, avg_game_score=38.35737327214989
+Episode 6400: epsilon=0.041, avg_reward=196.285, avg_game_score=37.956601932512605
+Episode 6500: epsilon=0.039, avg_reward=218.846, avg_game_score=38.83430323505834
+Episode 6600: epsilon=0.037, avg_reward=216.593, avg_game_score=36.21350507624813
+Episode 6700: epsilon=0.035, avg_reward=212.060, avg_game_score=38.889846309958386
+Episode 6800: epsilon=0.033, avg_reward=225.472, avg_game_score=39.74088176541907
+Episode 6900: epsilon=0.032, avg_reward=185.046, avg_game_score=40.785062334765755
+Episode 7000: epsilon=0.030, avg_reward=213.998, avg_game_score=40.40014713308185
+Episode 7100: epsilon=0.029, avg_reward=170.210, avg_game_score=42.67988049834996
+Episode 7200: epsilon=0.027, avg_reward=186.375, avg_game_score=41.19373883656558
+Episode 7300: epsilon=0.026, avg_reward=214.835, avg_game_score=38.90763503724184
+Episode 7400: epsilon=0.025, avg_reward=221.063, avg_game_score=40.579010278348115
+Episode 7500: epsilon=0.023, avg_reward=236.495, avg_game_score=39.373934346169584
+Episode 7600: epsilon=0.022, avg_reward=220.549, avg_game_score=37.983738117297456
+Episode 7700: epsilon=0.021, avg_reward=250.958, avg_game_score=39.43423810947665
+Episode 7800: epsilon=0.020, avg_reward=245.144, avg_game_score=39.193913400490494
+Episode 7900: epsilon=0.019, avg_reward=231.213, avg_game_score=39.97099161878593
+Episode 8000: epsilon=0.018, avg_reward=257.350, avg_game_score=40.5361296778014
+Episode 8100: epsilon=0.017, avg_reward=226.561, avg_game_score=40.40612980644958
+Episode 8200: epsilon=0.017, avg_reward=251.815, avg_game_score=39.674566706052225
+Episode 8300: epsilon=0.016, avg_reward=235.647, avg_game_score=40.36630267041188
+Episode 8400: epsilon=0.015, avg_reward=258.577, avg_game_score=39.794342714662235
+Episode 8500: epsilon=0.014, avg_reward=253.086, avg_game_score=40.63886799753824
+Episode 8600: epsilon=0.014, avg_reward=249.817, avg_game_score=41.491157938790494
+Episode 8700: epsilon=0.013, avg_reward=241.094, avg_game_score=42.25454295101543
+Episode 8800: epsilon=0.012, avg_reward=245.392, avg_game_score=40.95150197584523
+Episode 8900: epsilon=0.012, avg_reward=217.671, avg_game_score=41.741734431083515
+Episode 9000: epsilon=0.011, avg_reward=231.175, avg_game_score=42.687873688967564
+Episode 9100: epsilon=0.011, avg_reward=264.251, avg_game_score=42.28086517408414
+Episode 9200: epsilon=0.010, avg_reward=245.467, avg_game_score=42.604835524096
+Episode 9300: epsilon=0.010, avg_reward=254.724, avg_game_score=40.40003082790415
+Episode 9400: epsilon=0.010, avg_reward=262.379, avg_game_score=41.7371292679038
+Episode 9500: epsilon=0.010, avg_reward=257.748, avg_game_score=41.02632595840634
+Episode 9600: epsilon=0.010, avg_reward=257.879, avg_game_score=42.21699876414114
+Episode 9700: epsilon=0.010, avg_reward=261.834, avg_game_score=40.92997108533909
+Episode 9800: epsilon=0.010, avg_reward=251.532, avg_game_score=42.989320765464896
+Episode 9900: epsilon=0.010, avg_reward=264.672, avg_game_score=42.63955809290399
 
-"""
-Episode 200: epsilon=0.010, avg_reward=52.770, avg_game_score=42.691542288557216
-Episode 400: epsilon=0.010, avg_reward=63.355, avg_game_score=40.22
-Episode 600: epsilon=0.010, avg_reward=62.859, avg_game_score=38.36
-Episode 800: epsilon=0.010, avg_reward=58.374, avg_game_score=38.95
-Episode 1000: epsilon=0.010, avg_reward=54.613, avg_game_score=41.025
-Episode 1200: epsilon=0.010, avg_reward=54.586, avg_game_score=39.555
-Episode 1400: epsilon=0.010, avg_reward=58.190, avg_game_score=41.36
-Episode 1600: epsilon=0.010, avg_reward=55.283, avg_game_score=41.735
-Episode 1800: epsilon=0.010, avg_reward=57.721, avg_game_score=39.53
-Episode 2000: epsilon=0.010, avg_reward=50.512, avg_game_score=41.93
-Episode 2200: epsilon=0.010, avg_reward=54.224, avg_game_score=40.685
-Episode 2400: epsilon=0.010, avg_reward=48.242, avg_game_score=41.26
-Episode 2600: epsilon=0.010, avg_reward=46.489, avg_game_score=42.95
-Episode 2800: epsilon=0.010, avg_reward=44.577, avg_game_score=43.715
-Episode 3000: epsilon=0.010, avg_reward=43.514, avg_game_score=41.52
-Episode 3200: epsilon=0.010, avg_reward=47.184, avg_game_score=41.645
-Episode 3400: epsilon=0.010, avg_reward=49.623, avg_game_score=41.24
-Episode 3600: epsilon=0.010, avg_reward=50.055, avg_game_score=42.025
-Episode 3800: epsilon=0.010, avg_reward=48.845, avg_game_score=43.385
-Episode 4000: epsilon=0.010, avg_reward=55.899, avg_game_score=42.155
-Episode 4200: epsilon=0.010, avg_reward=57.383, avg_game_score=39.615
-Episode 4400: epsilon=0.010, avg_reward=61.676, avg_game_score=37.14
 """
