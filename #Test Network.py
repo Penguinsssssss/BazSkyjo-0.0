@@ -1,4 +1,4 @@
-#NN test page
+#BAZ Skyjo Testing Env
 
 import random
 import math
@@ -6,11 +6,13 @@ import numpy as np #type: ignore
 seed = random.randint(0, 9999)
 np.random.seed(seed)
 print(f"Seed: {seed}")
-#np.random.seed(3)
+#np.random.seed(4)
 import copy
 from collections import deque
 from pandas import DataFrame
+from pathlib import Path
 
+# e
 e = math.e
 
 # activation functions
@@ -21,11 +23,14 @@ def expo(input): return np.exp(input) # exponent
 # derivative activaiton functions
 def d_relu(x): return (x > 0).astype(float) # rectified linear
 
-isDebug = True
-AGENT_PATH = "c:\\users\\benjaminsullivan\\downloads\\checkpoint big brain.npz"
-isLoading = isDebug
-SAVE_PATH = AGENT_PATH
-isSaving = not isDebug
+# training settings
+numtrials = 15000 # how many episodes before training is declared done?
+isDebug = False # print 1 game?
+base_path = Path(__file__).parent
+AGENT_PATH = f"{base_path}\\checkpoint.npz" # create checkpoint file
+isLoading = False # load already existing model to continue training?
+SAVE_PATH = AGENT_PATH # save to another location?
+isSaving = not isDebug # save progress each 1% of training?
 
 class DuelingDQN:
     
@@ -37,7 +42,7 @@ class DuelingDQN:
         self.gamma = gamma
         self.epsilon = epsilon # exploration chance
         self.epsilon_decay = epsilon_decay # exploration rate of change
-        self.epsilon_min = epsilon_min # NN will always have a small chance to explore
+        self.epsilon_min = epsilon_min # NN will always have a small chance to explore during training
         self.lr = lr # learning rate of the model
         self.tau = tau # rate of main network moving to target network
         
@@ -262,6 +267,7 @@ class Network:
         # find loss
         loss = np.mean((Q_pred - target) ** 2)
         
+        # apply backprop
         dQ = (2 * (Q_pred - target)) / Q_pred.shape[0]
         dV = np.sum(dQ, axis=1, keepdims=True)
         dA = dQ - np.mean(dQ, axis=1, keepdims=True)
@@ -270,26 +276,6 @@ class Network:
         dTrunk = dA_prev + dV_prev
         for layer in reversed(self.layers):
             dTrunk = layer.backward(dTrunk)
-        
-        """
-        dL_dQ = (2 * (Q_pred - target)) / Q_pred.shape[0]
-        dQ_dV = np.ones_like(self.last_V) # intended shape (batch, 1)
-        num_actions = self.last_A.shape[1]
-        dQ_dA = np.ones_like(self.last_A) - (1 / num_actions) # intended shape (batch, num_outputs)
-        
-        dL_dV = np.sum(dL_dQ, axis=1, keepdims=True) # intended shape (batch, 1)
-        dL_dA = dL_dQ * dQ_dA # intended shape (batch, num_actions)
-        
-        # execute bp (causes crash)
-        dA_prev = self.advantage.backward(dL_dA)
-        dV_prev = self.value.backward(dL_dV)
-        
-        # combine gradients
-        dTrunk = dA_prev + dV_prev
-        
-        # backprop hidden layers
-        for layer in reversed(self.layers): dTrunk = layer.backward(dTrunk)
-        """
         
         # update values
         for layer in self.layers: layer.update_parameters(lr)
@@ -348,9 +334,11 @@ class Layer:
     
     def update_parameters(self, lr):
         
+        # clip gradients
         np.clip(self.dW, -1, 1, out=self.dW)
         np.clip(self.db, -1, 1, out=self.db)
         
+        # update values
         self.weights -= lr * self.dW
         self.biases  -= lr * self.db
 
@@ -388,208 +376,13 @@ class Environment:
         
         self.state_size = state_size
         self.action_size = action_size
-    
-    def reset(self): pass
-    def step(self, action): pass
-    def get_reward(self): pass
-
-class Quixx_Env(Environment):
-    
-    def __init__(self, debug=False):
-        
-        super().__init__(state_size=51, action_size=13)
-        
-        self.sheet = None
-        self.dice = None
-        self.done = False
-        self.legal_marks = None
-        
-        self.debug = debug
-        
-        self.reset()
-    
-    def dbg(self, msg):
-        if self.debug: print(msg)
-    
-    def reset(self):
-        
-        # roll all 6 dice
-        self.dice = [random.randint(1,6) for _ in range(6)] #white1, white2, red, yellow, green, blue
-        self.dbg(f"Dice rolled: {self.dice}")
-        
-        # create blank sheet
-        self.sheet = {
-            "red": [0,0,0,0,0,0,0,0,0,0,0],
-            "yellow": [0,0,0,0,0,0,0,0,0,0,0],
-            "green": [0,0,0,0,0,0,0,0,0,0,0],
-            "blue": [0,0,0,0,0,0,0,0,0,0,0],
-            "penalties": 0
-            }
-        
-        self.done = False
-        
-        return self.encode_state()
-    
-    def encode_state(self):
-        
-        # flatten current sheet info
-        sheet_vals = (
-            self.sheet["red"]
-            + self.sheet["yellow"]
-            + self.sheet["green"]
-            + self.sheet["blue"]
-            + [self.sheet["penalties"]]
-        )
-        
-        # flatten all info to state
-        state = sheet_vals + self.dice
-        
-        return np.array(state, dtype=float)
-    
-    def step(self, action):
-        
-        # return gamestate if done
-        if self.done: return self.encode_state(), 0, True # done = true
-        
-        # init reward
-        reward = 0
-        
-        if action == 12:
-            
-            self.sheet["penalties"] += 1
-            reward = -0.5
-            self.dbg("Action was SKIP/PENALTY")
-            
-        else:
-            white = self.dice[0:2]
-            color_dice = self.dice[2:]  # red, yellow, green, blue dice
-            
-            if action < 4:
-                color = ["red","yellow","green","blue"][action]
-                idx = sum(white)
-            elif action == 4:
-                color = "red"; idx = white[0] + color_dice[0]
-            elif action == 5:
-                color = "red"; idx = white[1] + color_dice[0]
-            elif action == 6:
-                color = "yellow"; idx = white[0] + color_dice[1]
-            elif action == 7:
-                color = "yellow"; idx = white[1] + color_dice[1]
-            elif action == 8:
-                color = "green"; idx = white[0] + color_dice[2]
-            elif action == 9:
-                color = "green"; idx = white[1] + color_dice[2]
-            elif action == 10:
-                color = "blue"; idx = white[0] + color_dice[3]
-            elif action == 11:
-                color = "blue"; idx = white[1] + color_dice[3]
-            
-            self.dbg(f"Trying to mark {color}, at number {idx}")
-            
-            if action in self.legal_marks:
-                if color in ["red", "yellow"]:
-                    # rows go left to right
-                    if 1 in self.sheet[color]:
-                        last_mark = max(i for i, v in enumerate(self.sheet[color]) if v == 1)
-                        skips = (idx-2) - last_mark - 1
-                    else:
-                        skips = (idx-2)  # skipped everything before first mark
-                        
-                else:
-                    # green / blue go right to left
-                    if 1 in self.sheet[color]:
-                        last_mark = min(i for i, v in enumerate(self.sheet[color]) if v == 1)
-                        skips = last_mark - (idx-2) - 1
-                    else:
-                        skips = (len(self.sheet[color]) - 1) - (idx-2)  # skipped everything after first mark
-                
-                self.sheet[color][idx-2] = 1  # idx starts at 1
-                reward = 0.3 - (0.2 * skips)
-                
-            else:
-                self.sheet["penalties"] += 1
-                reward = -0.5
-                self.dbg("Illegal move, penalty applied")
-        
-        self.dbg(f"{self.sheet["red"]}")
-        self.dbg(f"{self.sheet["yellow"]}")
-        self.dbg(f"{self.sheet["green"]}")
-        self.dbg(f"{self.sheet["blue"]}")
-        self.dbg(f"Pens: {self.sheet["penalties"]}")
-        
-        if self.sheet["penalties"] >= 4: self.done = True
-        
-        # roll new dice for next turn
-        self.dice = [random.randint(1,6) for _ in range(6)]
-        self.dbg(f"Dice rolled: {self.dice}")
-        
-        return self.encode_state(), reward, self.done
-    
-    def get_legal_actions(self):
-        
-        # init legal moves (will be returned at end of function)
-        legal = []
-        
-        def can_mark(color, idx):
-            if color in ["red", "yellow"]:
-                if idx != 10:
-                    return sum(self.sheet[color][idx-2:]) == 0 # only allowed to mark rightmost squares
-                else: return sum(self.sheet[color]) >= 5 # must have 5 marks to claim lock
-            else:
-                if idx != 10:
-                    return sum(self.sheet[color][:idx-1]) == 0 # only allowed to mark leftmost squares
-                else: return sum(self.sheet[color]) >= 5 # still must have 5 marks to claim lock
-        
-        # white+white
-        ww_sum = self.dice[0] + self.dice[1] - 1  # convert to index
-        for action_idx, color in enumerate(["red", "yellow", "green", "blue"]):
-            if can_mark(color, ww_sum):
-                legal.append(action_idx)
-        
-        # red
-        if can_mark("red", self.dice[0] + self.dice[2] - 2): legal.append(4)
-        if can_mark("red", self.dice[1] + self.dice[2] - 2): legal.append(5)
-        
-        # yellow
-        if can_mark("yellow", self.dice[0] + self.dice[3] - 2): legal.append(6)
-        if can_mark("yellow", self.dice[1] + self.dice[3] - 2): legal.append(7)
-        
-        # green
-        if can_mark("green", self.dice[0] + self.dice[4] - 2): legal.append(8)
-        if can_mark("green", self.dice[1] + self.dice[4] - 2): legal.append(9)
-        
-        # blue
-        if can_mark("blue", self.dice[0] + self.dice[5] - 2): legal.append(10)
-        if can_mark("blue", self.dice[1] + self.dice[5] - 2): legal.append(11)
-        
-        # penalty action is always legal
-        legal.append(12)
-        
-        self.dbg(f"Legal marks: {legal}")
-        
-        return legal
-    
-    def score_game(self):
-        
-        # penalty is -5
-        score = self.sheet["penalties"] * -5
-        
-        # each row is worth more for every new mark
-        point_vals = [0, 1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66, 78]
-        
-        for color in ["red", "yellow", "green", "blue"]:
-            score += point_vals[sum(self.sheet[color])]
-        
-        self.dbg(f"Game over! Score is: {score}")
-        
-        return score
 
 class Skyjo_Env(Environment):
     
     def __init__(self, debug=False):
         
-        super().__init__(state_size=30, action_size=24)
-        # 12 cards, 1 for discard, 1 for number of players, 1 for avg value of deck, 1 for lowest unknowns of any player, 1 for pending card, 1 for phase
+        # 12 cards, discard pile, average value of unknown, lowest number of unknowns left, pendingcard, phase, which rows have a double, which rows have a triple, sum of hand, turns into game
+        super().__init__(state_size=31, action_size=24)
         
         self.debug = debug
         
@@ -614,47 +407,59 @@ class Skyjo_Env(Environment):
             self.hands.append([self.deck.pop(), self.deck.pop(), None, None, None, None, None, None, None, None, None, None])
         
         # cards for self
-        self.hand = [self.deck.pop(), self.deck.pop(), None, None, None, None, None, None, None, None, None, None]
+        self.hand = [None] * 12
+        # reveal two random cards
+        for i in random.sample(range(12), 2):
+            self.hand[i] = self.deck.pop()
         self.phand = copy.deepcopy(self.hand)
         
+        # globals for phase
         self.phase = "main"
         self.pendingcard = None
         
+        # check if game is over
         self.done = False
         
+        # globals for bonus
         self.bonus = 0
+        self.turn = 1
         
         return self.encode_state()
     
     def norm(self, card):
         if card is None: return 1.0 # sentinel
-        else: return (card + 2) / 15 # norm value
+        else: return (card + 2) / 15 # norm value (exc. 1 for sentinel)
     
     def encode_state(self):
         
+        # normalize all of own cards and deck avg
         own = [self.norm(i) for i in self.hand]
         avg = self.norm(sum(self.deck) / len(self.deck))
         
+        # check each row for doubles
         doubles = []
         for i in range(4):
-        
-            if ((self.hand[i] == self.hand[i + 4]) or (self.hand[i+8] == self.hand[i + 4]) or (self.hand[i] == self.hand[i + 8])) and (self.hand[i] is not None) and (self.hand[i+4] is not None): # if column is same card and not unknowns
-                doubles.append(1)
-            else: doubles.append(0)
-        
+            col = [self.hand[i], self.hand[i + 4], self.hand[i + 8]]
+            known = [c for c in col if c is not None]
+            doubles.append(1 if len(known) != len(set(known)) else 0)
         
         triples = []
         
-        # check for triple
+        # check each row for triple
+        triples = []
         for i in range(4):
+            col = [self.hand[i], self.hand[i + 4], self.hand[i + 8]]
+            triples.append(1 if col[0] is not None and col[0] == col[1] == col[2] else 0)
         
-            if self.hand[i] == self.hand[i + 4] == self.hand[i + 8] and self.hand[i] is not None: # if column is same card and not unknowns
-                triples.append(1)
-            else: triples.append(0)
-        
+        # gather sum of hand
         sums = []
         for i in range(4):
-            sums.append((self.hand[i] if self.hand[i] is not None else avg + self.hand[i+4] if self.hand[i+4] is not None else avg + self.hand[i+8] if self.hand[i+8] is not None else avg + 6) / 45)
+            col_sum = (
+                (self.hand[i] if self.hand[i] is not None else avg) +
+                (self.hand[i + 4] if self.hand[i + 4] is not None else avg) +
+                (self.hand[i + 8] if self.hand[i + 8] is not None else avg)
+            )
+            sums.append((col_sum + 6) / 45) # norm
         
         return (
             own + # own cards
@@ -666,11 +471,13 @@ class Skyjo_Env(Environment):
             [1 if self.phase == "pending" else 0] +
             doubles +
             triples +
-            sums
+            sums +
+            [self.turn / 100]
         )
     
     def step(self, action):
         
+        # print hand for debug
         if self.phase == "main":
             self.dbg("")
             self.dbg(f"baz hand: {self.hand[:4]}")
@@ -713,8 +520,8 @@ class Skyjo_Env(Environment):
     
     def act(self, action):
         
-        # main: 0-11 discard -> hand, 12 reveal top of deck
-        # pending: 0-11 pending -> hand, 12-23 pending -> discard + reveal one card in hand
+        # main: 0 -> draw from deck | 1 -> take discard
+        # pending: 0-11 pending -> hand | 12-23 pending -> discard + reveal one card in hand
         if self.phase == "main":
             
             if action == 0: # TAKE FROM DRAW
@@ -728,7 +535,6 @@ class Skyjo_Env(Environment):
             else: # TAKE FROM DISCARD
                 
                 self.dbg(f"Action 1 chosen (take discard) discard is: {self.discard}")
-                #self.dbg("\n------------------------------")
                 
                 # store discard
                 self.pendingcard = self.discard
@@ -767,6 +573,7 @@ class Skyjo_Env(Environment):
             
             self.pendingcard = None
             self.phase = "main"
+            self.turn += 1
             if isDebug: input()
     
     def advanceopp(self):
@@ -809,28 +616,38 @@ class Skyjo_Env(Environment):
     
     def calcbonus(self, slot, old, new, wasUnknown):
         
+        # init bonus value
         bonus = 0
         
+        # currently no reward for replacing an unknown
+        # reward of old^2 - new^2 for replacing a card
         if wasUnknown:
             bonus += 0
         else:
             bonus += ((old*abs(old)) - (new*abs(new))) / 60
         
+        # find out doubles + triples
         row = []
         for i in range(3):
             row.append(self.hand[(slot % 4) + (i * 4)])
         
+        # for each row if created a double + 1 | if created a triple + 10
         if row.count(new) >= 2:
             bonus += 1
             if row.count(new) == 3:
                 bonus += 10
         
+        # penalize for high score, which gets more and more important as the game goes on
+        #bonus += (20 - self.score_game()) * (self.turn / 20)
+        
         return bonus
     
     def calcreward(self):
         
+        # get deck avg
         avg = sum(self.deck) / len(self.deck)
         
+        # prev hand expected value
         pExpected = 0
         for i in range(4):
         
@@ -845,6 +662,7 @@ class Skyjo_Env(Environment):
                 pExpected += card2 if card2 is not None else avg
                 pExpected += card3 if card3 is not None else avg
         
+        # current hand expected value
         cExpected = 0
         for i in range(4):
         
@@ -859,9 +677,11 @@ class Skyjo_Env(Environment):
                 cExpected += card2 if card2 is not None else avg
                 cExpected += card3 if card3 is not None else avg
         
+        # reward is the difference of prev hand - hand
         reward = pExpected - cExpected
-        reward += self.bonus
+        reward += self.bonus # add bonus
         
+        # if last turn of game -> add game score to reward
         if self.done:
             self.reward += -self.score_game()
         
@@ -915,7 +735,7 @@ def main():
     agent = DuelingDQN(env.state_size, env.action_size, epsilon_decay=0.9995, epsilon_min=0.01) # set agent size to fit env
     if isLoading: agent.load(AGENT_PATH, load_epsilon=True) # else start fresh with a new agent
     
-    episodes = 1 if isDebug else 10000
+    episodes = 1 if isDebug else numtrials
     max_steps = 1000
     
     # data collection settings
@@ -926,7 +746,7 @@ def main():
     scores = []
     
     # visual indicator for impacient humans
-    num_logs = 1000
+    num_logs = numtrials/100
     
     for ep in range(episodes):
         
@@ -965,6 +785,7 @@ def main():
         agent.epsilon = max(agent.epsilon_min, agent.epsilon * agent.epsilon_decay)
         
         score = env.score_game()
+        #print(f"Game end {score}")
         episode_scores.append(score)
         total_episode_score += score
         
@@ -985,259 +806,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-""" EXAMPLE OF WEIRD BEHAVIOR
-Seed: 663
-program running
-
-baz hand: [7, 1, None, None]
-baz hand: [None, None, None, None]    
-baz hand: [None, None, None, None]    
-discard: 5
-Action 0 (draw) chosen (card 7)       
-chosen to accept pendingcard to slot 0
-
-------------------------------        
-
-
-baz hand: [7, 1, None, None]
-baz hand: [None, None, None, None]    
-baz hand: [None, None, None, None]    
-discard: 9
-Action 0 (draw) chosen (card 12)      
-chosen to accept pendingcard to slot 0
-
-------------------------------        
-
-
-baz hand: [12, 1, None, None]
-baz hand: [None, None, None, None]    
-baz hand: [None, None, None, None]    
-discard: 10
-Action 0 (draw) chosen (card 12)      
-chosen to accept pendingcard to slot 0
-
-------------------------------        
-
-
-baz hand: [12, 1, None, None]     
-baz hand: [None, None, None, None]
-baz hand: [None, None, None, None]
-discard: 6
-Action 0 (draw) chosen (card 6)
-chosen to accept pendingcard to slot 0
-
-------------------------------
-
-
-baz hand: [6, 1, None, None]
-baz hand: [None, None, None, None]
-baz hand: [None, None, None, None]
-discard: 10
-Action 0 (draw) chosen (card 4)
-chosen to accept pendingcard to slot 0
-
-------------------------------
-
-
-baz hand: [4, 1, None, None]
-baz hand: [None, None, None, None]
-baz hand: [None, None, None, None]
-discard: 1
-Action 1 chosen (take discard) discard is: 1
-chosen to accept pendingcard to slot 2
-
-------------------------------
-
-
-baz hand: [4, 1, 1, None]
-baz hand: [None, None, None, None]
-baz hand: [None, None, None, None]
-discard: 2
-Action 1 chosen (take discard) discard is: 2
-chosen to accept pendingcard to slot 0
-
-------------------------------
-
-
-baz hand: [2, 1, 1, None]
-baz hand: [None, None, None, None]
-baz hand: [None, None, None, None]
-discard: 6
-Action 0 (draw) chosen (card 8)
-chosen to reject pendingcard and reveal slot 11
-
-------------------------------
-
-
-baz hand: [2, 1, 1, None]
-baz hand: [None, None, None, None]
-baz hand: [None, None, None, 11]
-discard: 9
-Action 0 (draw) chosen (card 10)
-chosen to accept pendingcard to slot 3
-
-------------------------------
-
-
-baz hand: [2, 1, 1, 10]
-baz hand: [None, None, None, None]
-baz hand: [None, None, None, 11]
-discard: 1
-Action 1 chosen (take discard) discard is: 1
-chosen to accept pendingcard to slot 3      
-
-------------------------------
-
-
-baz hand: [2, 1, 1, 1]
-baz hand: [None, None, None, None]    
-baz hand: [None, None, None, 11]      
-discard: 11
-Action 0 (draw) chosen (card 0)       
-chosen to accept pendingcard to slot 6
-
-------------------------------        
-
-
-baz hand: [2, 1, 1, 1]
-baz hand: [None, None, 0, None]
-baz hand: [None, None, None, 11]
-discard: 12
-Action 0 (draw) chosen (card 8)
-chosen to reject pendingcard and reveal slot 9
-
-------------------------------
-
-
-baz hand: [2, 1, 1, 1]
-baz hand: [None, None, 0, None]
-baz hand: [None, -1, None, 11]
-discard: 9
-Action 0 (draw) chosen (card 0)
-chosen to accept pendingcard to slot 4
-
-------------------------------
-
-
-baz hand: [2, 1, 1, 1]
-baz hand: [0, None, 0, None]
-baz hand: [None, -1, None, 11]
-discard: 7
-Action 0 (draw) chosen (card 7)
-chosen to reject pendingcard and reveal slot 10
-
-------------------------------
-
-
-baz hand: [2, 1, 1, 1]
-baz hand: [0, None, 0, None]
-baz hand: [None, -1, 5, 11]
-discard: 1
-Action 1 chosen (take discard) discard is: 1
-chosen to accept pendingcard to slot 5
-
-------------------------------
-
-
-baz hand: [2, 1, 1, 1]
-baz hand: [0, 1, 0, None]
-baz hand: [None, -1, 5, 11]
-discard: 2
-Score: 33.325581395348834
-"""
-
-"""
-Episode 100: epsilon=0.951, avg_reward=22.917, avg_game_score=62.20736142397325
-Episode 200: epsilon=0.904, avg_reward=5.949, avg_game_score=63.49193643209338
-Episode 300: epsilon=0.860, avg_reward=41.209, avg_game_score=59.918043408188396
-Episode 400: epsilon=0.818, avg_reward=36.518, avg_game_score=58.5174557875186
-Episode 500: epsilon=0.778, avg_reward=35.183, avg_game_score=57.874610522368805
-Episode 600: epsilon=0.740, avg_reward=30.912, avg_game_score=58.61300736444958
-Episode 700: epsilon=0.704, avg_reward=48.467, avg_game_score=55.673812938202545
-Episode 1600: epsilon=0.449, avg_reward=106.802, avg_game_score=49.287830645580524603                                                                       8355
-Episode 1700: epsilon=0.427, avg_reward=101.043, avg_game_score=47.57738998896054388624                                                                      72
-Episode 1800: epsilon=0.406, avg_reward=103.993, avg_game_score=48.917126987255353534                                                                      9282
-Episode 1900: epsilon=0.386, avg_reward=109.479, avg_game_score=47.171802884813189444                                                                       3288
-Episode 2000: epsilon=0.368, avg_reward=115.109, avg_game_score=46.63279900746763       
-Episode 2100: epsilon=0.350, avg_reward=130.684, avg_game_score=44.4612071001415        
-Episode 2200: epsilon=0.333, avg_reward=133.569, avg_game_score=45.28799937544024       
-Episode 2300: epsilon=0.316, avg_reward=119.298, avg_game_score=46.06359462875291       
-Episode 2400: epsilon=0.301, avg_reward=123.850, avg_game_score=45.39479670696697       
-Episode 2500: epsilon=0.286, avg_reward=124.104, avg_game_score=45.50637402805091       
-Episode 2600: epsilon=0.272, avg_reward=134.636, avg_game_score=43.86509009518008       
-Episode 2700: epsilon=0.259, avg_reward=116.228, avg_game_score=46.40203502293707       
-Episode 2800: epsilon=0.246, avg_reward=125.410, avg_game_score=45.6886547494982
-Episode 2900: epsilon=0.234, avg_reward=139.801, avg_game_score=45.52583906869402
-Episode 3000: epsilon=0.223, avg_reward=126.701, avg_game_score=45.868907662744185
-Episode 3100: epsilon=0.212, avg_reward=148.628, avg_game_score=44.38179654430128
-Episode 3200: epsilon=0.202, avg_reward=160.407, avg_game_score=43.581100156305325
-Episode 3300: epsilon=0.192, avg_reward=150.847, avg_game_score=42.154951571824746
-Episode 3400: epsilon=0.183, avg_reward=146.649, avg_game_score=43.9246487631625
-Episode 3500: epsilon=0.174, avg_reward=154.558, avg_game_score=42.34712513661359
-Episode 3600: epsilon=0.165, avg_reward=151.229, avg_game_score=45.541040029288006
-Episode 3700: epsilon=0.157, avg_reward=162.648, avg_game_score=43.58571520615299
-Episode 3800: epsilon=0.149, avg_reward=145.970, avg_game_score=41.95216344221138
-Episode 3900: epsilon=0.142, avg_reward=160.241, avg_game_score=42.189632556338694
-Episode 4000: epsilon=0.135, avg_reward=175.034, avg_game_score=40.726473335973054
-Episode 4100: epsilon=0.129, avg_reward=188.014, avg_game_score=40.52867224402437
-Episode 4200: epsilon=0.122, avg_reward=172.673, avg_game_score=41.1131126347178
-Episode 4300: epsilon=0.116, avg_reward=166.961, avg_game_score=42.14628996756894
-Episode 4400: epsilon=0.111, avg_reward=175.820, avg_game_score=40.22487373280322
-Episode 4500: epsilon=0.105, avg_reward=169.503, avg_game_score=40.679736432316616
-Episode 4600: epsilon=0.100, avg_reward=155.307, avg_game_score=41.4257863302418
-Episode 4700: epsilon=0.095, avg_reward=170.475, avg_game_score=43.488228539222376
-Episode 4800: epsilon=0.091, avg_reward=163.409, avg_game_score=44.1445303411669
-Episode 4900: epsilon=0.086, avg_reward=160.063, avg_game_score=41.54665343147094
-Episode 5000: epsilon=0.082, avg_reward=183.165, avg_game_score=41.68448517134585
-Episode 5100: epsilon=0.078, avg_reward=184.073, avg_game_score=40.972212350595534
-Episode 5200: epsilon=0.074, avg_reward=189.533, avg_game_score=42.15726094512238
-Episode 5300: epsilon=0.071, avg_reward=151.270, avg_game_score=41.873834217216434
-Episode 5400: epsilon=0.067, avg_reward=188.744, avg_game_score=39.33045617167505
-Episode 5500: epsilon=0.064, avg_reward=210.797, avg_game_score=40.41452049603706
-Episode 5600: epsilon=0.061, avg_reward=217.982, avg_game_score=37.25239355299875
-Episode 5700: epsilon=0.058, avg_reward=189.316, avg_game_score=39.30069709459023
-Episode 5800: epsilon=0.055, avg_reward=188.436, avg_game_score=38.14250070076673
-Episode 5900: epsilon=0.052, avg_reward=214.966, avg_game_score=36.05841693325761
-Episode 6000: epsilon=0.050, avg_reward=217.971, avg_game_score=36.516627744330656
-Episode 6100: epsilon=0.047, avg_reward=219.392, avg_game_score=40.47136115475816
-Episode 6200: epsilon=0.045, avg_reward=214.317, avg_game_score=39.77284513579341
-Episode 6300: epsilon=0.043, avg_reward=213.587, avg_game_score=38.35737327214989
-Episode 6400: epsilon=0.041, avg_reward=196.285, avg_game_score=37.956601932512605
-Episode 6500: epsilon=0.039, avg_reward=218.846, avg_game_score=38.83430323505834
-Episode 6600: epsilon=0.037, avg_reward=216.593, avg_game_score=36.21350507624813
-Episode 6700: epsilon=0.035, avg_reward=212.060, avg_game_score=38.889846309958386
-Episode 6800: epsilon=0.033, avg_reward=225.472, avg_game_score=39.74088176541907
-Episode 6900: epsilon=0.032, avg_reward=185.046, avg_game_score=40.785062334765755
-Episode 7000: epsilon=0.030, avg_reward=213.998, avg_game_score=40.40014713308185
-Episode 7100: epsilon=0.029, avg_reward=170.210, avg_game_score=42.67988049834996
-Episode 7200: epsilon=0.027, avg_reward=186.375, avg_game_score=41.19373883656558
-Episode 7300: epsilon=0.026, avg_reward=214.835, avg_game_score=38.90763503724184
-Episode 7400: epsilon=0.025, avg_reward=221.063, avg_game_score=40.579010278348115
-Episode 7500: epsilon=0.023, avg_reward=236.495, avg_game_score=39.373934346169584
-Episode 7600: epsilon=0.022, avg_reward=220.549, avg_game_score=37.983738117297456
-Episode 7700: epsilon=0.021, avg_reward=250.958, avg_game_score=39.43423810947665
-Episode 7800: epsilon=0.020, avg_reward=245.144, avg_game_score=39.193913400490494
-Episode 7900: epsilon=0.019, avg_reward=231.213, avg_game_score=39.97099161878593
-Episode 8000: epsilon=0.018, avg_reward=257.350, avg_game_score=40.5361296778014
-Episode 8100: epsilon=0.017, avg_reward=226.561, avg_game_score=40.40612980644958
-Episode 8200: epsilon=0.017, avg_reward=251.815, avg_game_score=39.674566706052225
-Episode 8300: epsilon=0.016, avg_reward=235.647, avg_game_score=40.36630267041188
-Episode 8400: epsilon=0.015, avg_reward=258.577, avg_game_score=39.794342714662235
-Episode 8500: epsilon=0.014, avg_reward=253.086, avg_game_score=40.63886799753824
-Episode 8600: epsilon=0.014, avg_reward=249.817, avg_game_score=41.491157938790494
-Episode 8700: epsilon=0.013, avg_reward=241.094, avg_game_score=42.25454295101543
-Episode 8800: epsilon=0.012, avg_reward=245.392, avg_game_score=40.95150197584523
-Episode 8900: epsilon=0.012, avg_reward=217.671, avg_game_score=41.741734431083515
-Episode 9000: epsilon=0.011, avg_reward=231.175, avg_game_score=42.687873688967564
-Episode 9100: epsilon=0.011, avg_reward=264.251, avg_game_score=42.28086517408414
-Episode 9200: epsilon=0.010, avg_reward=245.467, avg_game_score=42.604835524096
-Episode 9300: epsilon=0.010, avg_reward=254.724, avg_game_score=40.40003082790415
-Episode 9400: epsilon=0.010, avg_reward=262.379, avg_game_score=41.7371292679038
-Episode 9500: epsilon=0.010, avg_reward=257.748, avg_game_score=41.02632595840634
-Episode 9600: epsilon=0.010, avg_reward=257.879, avg_game_score=42.21699876414114
-Episode 9700: epsilon=0.010, avg_reward=261.834, avg_game_score=40.92997108533909
-Episode 9800: epsilon=0.010, avg_reward=251.532, avg_game_score=42.989320765464896
-Episode 9900: epsilon=0.010, avg_reward=264.672, avg_game_score=42.63955809290399
-
-"""
